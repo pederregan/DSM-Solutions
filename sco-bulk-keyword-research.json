@@ -1,0 +1,345 @@
+{
+  "name": "SCO Bulk Keyword Research Tool",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "sco-bulk-keyword-research",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "webhook-trigger-bulk",
+      "name": "Webhook Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1.1,
+      "position": [240, 400],
+      "webhookId": "sco-bulk-keyword-research"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Validate bulk input with comprehensive error handling\ntry {\n  const body = $input.item.json.body || $input.item.json;\n  \n  // Validate keywords array\n  if (!body.keywords || !Array.isArray(body.keywords)) {\n    throw new Error('Invalid input: keywords must be an array');\n  }\n  \n  if (body.keywords.length === 0) {\n    throw new Error('Invalid input: keywords array cannot be empty');\n  }\n  \n  if (body.keywords.length > 50) {\n    throw new Error('Invalid input: maximum 50 keywords allowed per request');\n  }\n  \n  // Validate and clean each keyword\n  const validKeywords = [];\n  const errors = [];\n  \n  body.keywords.forEach((kw, index) => {\n    if (!kw || typeof kw !== 'string') {\n      errors.push(`Keyword at index ${index} is invalid (must be non-empty string)`);\n      return;\n    }\n    \n    const cleaned = kw.trim();\n    if (cleaned.length === 0) {\n      errors.push(`Keyword at index ${index} is empty after trimming`);\n      return;\n    }\n    \n    if (cleaned.length > 200) {\n      errors.push(`Keyword at index ${index} exceeds 200 characters`);\n      return;\n    }\n    \n    validKeywords.push(cleaned);\n  });\n  \n  if (validKeywords.length === 0) {\n    throw new Error(`No valid keywords found. Errors: ${errors.join('; ')}`);\n  }\n  \n  // Parse and validate depth\n  let depth = 20; // default\n  if (body.depth !== undefined) {\n    const parsedDepth = parseInt(body.depth);\n    if (isNaN(parsedDepth) || parsedDepth < 1) {\n      throw new Error('Invalid input: depth must be a positive number');\n    }\n    depth = Math.min(parsedDepth, 100); // cap at 100\n  }\n  \n  // Parse batch size for rate limiting\n  let batchSize = 3; // default: 3 concurrent requests\n  if (body.batchSize !== undefined) {\n    const parsedBatch = parseInt(body.batchSize);\n    if (!isNaN(parsedBatch) && parsedBatch >= 1 && parsedBatch <= 10) {\n      batchSize = parsedBatch;\n    }\n  }\n  \n  // Parse batch delay\n  let batchDelay = 2000; // default: 2 seconds between batches\n  if (body.batchDelay !== undefined) {\n    const parsedDelay = parseInt(body.batchDelay);\n    if (!isNaN(parsedDelay) && parsedDelay >= 0 && parsedDelay <= 10000) {\n      batchDelay = parsedDelay;\n    }\n  }\n  \n  const config = {\n    keywords: validKeywords,\n    totalKeywords: validKeywords.length,\n    depth: depth,\n    batchSize: batchSize,\n    batchDelay: batchDelay,\n    location: body.location || 'us',\n    language: body.language || 'en',\n    timestamp: new Date().toISOString(),\n    invalidKeywords: errors.length > 0 ? errors : null\n  };\n  \n  return config;\n  \n} catch (error) {\n  throw new Error(`Validation failed: ${error.message}`);\n}"
+      },
+      "id": "validate-bulk-input",
+      "name": "Validate Bulk Input",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [460, 400]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Split keywords into individual items for processing\nconst config = $input.item.json;\nconst keywords = config.keywords || [];\n\nreturn keywords.map(keyword => ({\n  keyword: keyword,\n  depth: config.depth,\n  location: config.location,\n  language: config.language,\n  batchSize: config.batchSize,\n  batchDelay: config.batchDelay,\n  totalKeywords: config.totalKeywords,\n  timestamp: config.timestamp\n}));"
+      },
+      "id": "split-keywords",
+      "name": "Split Keywords",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [680, 400]
+    },
+    {
+      "parameters": {
+        "batchSize": "={{ $json.batchSize }}",
+        "options": {}
+      },
+      "id": "batch-processor",
+      "name": "Batch Processor",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [900, 400]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "https://serpapi.com/search",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "serpApiApi",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "q",
+              "value": "={{ $json.keyword }}"
+            },
+            {
+              "name": "num",
+              "value": "={{ $json.depth }}"
+            },
+            {
+              "name": "engine",
+              "value": "google"
+            },
+            {
+              "name": "gl",
+              "value": "={{ $json.location }}"
+            },
+            {
+              "name": "hl",
+              "value": "={{ $json.language }}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 30000,
+          "retry": {
+            "maxRetries": 2,
+            "retryOnStatus": [429, 500, 502, 503, 504]
+          }
+        }
+      },
+      "id": "fetch-serp-bulk",
+      "name": "Fetch SERP",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1120, 400]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Process SERP data and perform gap analysis\ntry {\n  const serpData = $input.item.json;\n  const keyword = $('Batch Processor').item.json.keyword;\n  const depth = $('Batch Processor').item.json.depth;\n  \n  const organicResults = serpData.organic_results || [];\n  const relatedSearches = serpData.related_searches || [];\n  const relatedQuestions = serpData.related_questions || [];\n  const answerBox = serpData.answer_box || null;\n  const knowledgeGraph = serpData.knowledge_graph || null;\n  \n  // Process SERP overview\n  const serpOverview = organicResults.map((result, index) => {\n    let domain = '';\n    try {\n      if (result.link) {\n        domain = new URL(result.link).hostname.replace('www.', '');\n      }\n    } catch (e) {\n      domain = result.displayed_link || 'unknown';\n    }\n    \n    return {\n      rank: index + 1,\n      title: result.title || '',\n      snippet: result.snippet || '',\n      link: result.link || '',\n      domain: domain\n    };\n  });\n  \n  // Extract related keywords\n  const relatedKeywords = [];\n  \n  relatedSearches.forEach(item => {\n    if (item.query) {\n      relatedKeywords.push({\n        keyword: item.query,\n        source: 'related_search',\n        sourceKeyword: keyword\n      });\n    }\n  });\n  \n  relatedQuestions.forEach(item => {\n    if (item.question) {\n      relatedKeywords.push({\n        keyword: item.question,\n        source: 'people_also_ask',\n        sourceKeyword: keyword,\n        snippet: item.snippet || null\n      });\n    }\n  });\n  \n  // Calculate authority metrics\n  const domainCounts = {};\n  serpOverview.forEach(item => {\n    domainCounts[item.domain] = (domainCounts[item.domain] || 0) + 1;\n  });\n  \n  const highAuthorityDomains = [\n    'wikipedia.org', 'youtube.com', 'amazon.com', 'facebook.com',\n    'linkedin.com', 'twitter.com', 'instagram.com', 'reddit.com',\n    'quora.com', 'pinterest.com', 'medium.com', 'forbes.com',\n    'nytimes.com', 'washingtonpost.com', 'bbc.com', 'cnn.com'\n  ];\n  \n  const authorityCount = serpOverview.filter(item => \n    highAuthorityDomains.some(domain => item.domain.includes(domain))\n  ).length;\n  \n  const authorityMetrics = {\n    highAuthorityCount: authorityCount,\n    uniqueDomains: Object.keys(domainCounts).length,\n    totalResults: serpOverview.length,\n    domainConcentration: serpOverview.length > 0 ? Math.max(...Object.values(domainCounts)) / serpOverview.length : 0\n  };\n  \n  // Content theme analysis\n  const contentThemes = {};\n  const patterns = [\n    { name: 'how-to', keywords: ['how to', 'guide', 'tutorial', 'step', 'learn', 'instructions'] },\n    { name: 'comparison', keywords: ['vs', 'versus', 'compare', 'best', 'top', 'review'] },\n    { name: 'pricing', keywords: ['price', 'cost', 'pricing', 'cheap', 'expensive', 'affordable', 'free'] },\n    { name: 'definition', keywords: ['what is', 'definition', 'meaning', 'explain', 'overview'] },\n    { name: 'list', keywords: ['list', 'types', 'kinds', 'examples', 'ways'] },\n    { name: 'location', keywords: ['near me', 'location', 'where', 'local', 'nearby'] },\n    { name: 'reviews', keywords: ['review', 'rating', 'testimonial', 'customer', 'feedback'] },\n    { name: 'benefits', keywords: ['benefit', 'advantage', 'why', 'reason', 'pros'] }\n  ];\n  \n  serpOverview.forEach(item => {\n    const content = `${item.title} ${item.snippet}`.toLowerCase();\n    patterns.forEach(pattern => {\n      if (pattern.keywords.some(kw => content.includes(kw))) {\n        contentThemes[pattern.name] = (contentThemes[pattern.name] || 0) + 1;\n      }\n    });\n  });\n  \n  // Identify content gaps\n  const totalResults = serpOverview.length;\n  const missingSubtopics = [];\n  const thinContentAreas = [];\n  \n  patterns.forEach(pattern => {\n    const count = contentThemes[pattern.name] || 0;\n    const coverage = totalResults > 0 ? (count / totalResults) * 100 : 0;\n    \n    if (coverage === 0) {\n      missingSubtopics.push({\n        theme: pattern.name,\n        coverage: 0,\n        opportunity: 'high'\n      });\n    } else if (coverage < 20) {\n      thinContentAreas.push({\n        theme: pattern.name,\n        coverage: parseFloat(coverage.toFixed(1)),\n        opportunity: 'medium'\n      });\n    }\n  });\n  \n  // Repeated competitor angles\n  const repeatedAngles = Object.entries(contentThemes)\n    .filter(([_, count]) => count >= totalResults * 0.5)\n    .map(([theme, count]) => ({\n      theme: theme,\n      frequency: count,\n      saturation: 'high'\n    }));\n  \n  // SERP features\n  const serpFeatures = {\n    hasAnswerBox: !!answerBox,\n    hasKnowledgeGraph: !!knowledgeGraph,\n    hasPAA: relatedQuestions.length > 0,\n    relatedSearchCount: relatedSearches.length\n  };\n  \n  return {\n    keyword: keyword,\n    depth: depth,\n    serpOverview: serpOverview,\n    relatedKeywords: relatedKeywords,\n    authorityMetrics: authorityMetrics,\n    contentGaps: {\n      missingSubtopics: missingSubtopics,\n      thinContentAreas: thinContentAreas,\n      repeatedCompetitorAngles: repeatedAngles,\n      contentThemes: contentThemes\n    },\n    serpFeatures: serpFeatures\n  };\n  \n} catch (error) {\n  // Return error result for this keyword\n  return {\n    keyword: $('Batch Processor').item.json.keyword,\n    error: true,\n    errorMessage: error.message,\n    serpOverview: [],\n    relatedKeywords: [],\n    authorityMetrics: {},\n    contentGaps: {},\n    serpFeatures: {}\n  };\n}"
+      },
+      "id": "process-analyze-bulk",
+      "name": "Process & Analyze",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1340, 400]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Calculate difficulty and opportunity scores\ntry {\n  const data = $input.item.json;\n  \n  // Skip if error\n  if (data.error) {\n    return {\n      ...data,\n      difficultyScore: null,\n      opportunityScore: null,\n      priority: 'Error'\n    };\n  }\n  \n  const serpOverview = data.serpOverview || [];\n  const authorityMetrics = data.authorityMetrics || {};\n  const contentGaps = data.contentGaps || {};\n  \n  // === DIFFICULTY SCORE (0-100) ===\n  let difficultyScore = 0;\n  \n  const highAuthorityRatio = authorityMetrics.highAuthorityCount / Math.max(authorityMetrics.totalResults, 1);\n  difficultyScore += highAuthorityRatio * 35;\n  \n  const concentration = authorityMetrics.domainConcentration || 0;\n  if (concentration > 0.3) {\n    difficultyScore += 25;\n  } else if (concentration > 0.15) {\n    difficultyScore += 15;\n  } else {\n    difficultyScore += 5;\n  }\n  \n  const saturatedThemes = (contentGaps.repeatedCompetitorAngles || []).length;\n  difficultyScore += Math.min(saturatedThemes * 5, 20);\n  \n  // Default intent competition (without AI for speed)\n  difficultyScore += 12;\n  \n  difficultyScore = Math.min(Math.round(difficultyScore), 100);\n  \n  // === OPPORTUNITY SCORE (0-100) ===\n  let opportunityScore = 0;\n  \n  const missingCount = (contentGaps.missingSubtopics || []).length;\n  const thinCount = (contentGaps.thinContentAreas || []).length;\n  opportunityScore += Math.min(missingCount * 8 + thinCount * 4, 35);\n  \n  const keywordCount = (data.relatedKeywords || []).length;\n  opportunityScore += Math.min(keywordCount * 1.5, 25);\n  \n  // Default intent alignment\n  opportunityScore += 18;\n  \n  if (difficultyScore < 35) {\n    opportunityScore += 15;\n  } else if (difficultyScore < 55) {\n    opportunityScore += 10;\n  } else if (difficultyScore < 70) {\n    opportunityScore += 5;\n  }\n  \n  opportunityScore = Math.min(Math.round(opportunityScore), 100);\n  \n  // === PRIORITY ===\n  let priority = 'Low';\n  const combinedScore = opportunityScore - (difficultyScore * 0.65);\n  \n  if (combinedScore > 35 && opportunityScore > 65) {\n    priority = 'High';\n  } else if (combinedScore > 15 && opportunityScore > 45) {\n    priority = 'Medium';\n  }\n  \n  return {\n    ...data,\n    difficultyScore: difficultyScore,\n    opportunityScore: opportunityScore,\n    priority: priority,\n    combinedScore: parseFloat(combinedScore.toFixed(2))\n  };\n  \n} catch (error) {\n  return {\n    ...data,\n    difficultyScore: null,\n    opportunityScore: null,\n    priority: 'Error',\n    scoringError: error.message\n  };\n}"
+      },
+      "id": "score-keywords",
+      "name": "Score Keywords",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1560, 400]
+    },
+    {
+      "parameters": {
+        "amount": "={{ $('Batch Processor').item.json.batchDelay }}",
+        "unit": "ms"
+      },
+      "id": "batch-delay",
+      "name": "Batch Delay",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [1780, 400]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Aggregate all keyword results and prepare for master analysis\nconst allResults = $input.all();\nconst config = $('Validate Bulk Input').item.json;\n\n// Separate successful and failed keywords\nconst successful = [];\nconst failed = [];\n\nallResults.forEach(item => {\n  const data = item.json;\n  if (data.error) {\n    failed.push({\n      keyword: data.keyword,\n      error: data.errorMessage || data.scoringError || 'Unknown error'\n    });\n  } else {\n    successful.push(data);\n  }\n});\n\n// Collect all unique related keywords\nconst allRelatedKeywords = [];\nconst relatedKeywordSet = new Set();\n\nsuccessful.forEach(result => {\n  (result.relatedKeywords || []).forEach(rk => {\n    const key = rk.keyword.toLowerCase();\n    if (!relatedKeywordSet.has(key)) {\n      relatedKeywordSet.add(key);\n      allRelatedKeywords.push(rk);\n    }\n  });\n});\n\n// Calculate aggregate metrics\nconst totalSerp = successful.reduce((sum, r) => sum + (r.serpOverview || []).length, 0);\nconst avgDifficulty = successful.length > 0 \n  ? successful.reduce((sum, r) => sum + (r.difficultyScore || 0), 0) / successful.length \n  : 0;\nconst avgOpportunity = successful.length > 0\n  ? successful.reduce((sum, r) => sum + (r.opportunityScore || 0), 0) / successful.length\n  : 0;\n\n// Priority distribution\nconst priorityDist = { High: 0, Medium: 0, Low: 0, Error: 0 };\nallResults.forEach(item => {\n  const priority = item.json.priority || 'Error';\n  priorityDist[priority] = (priorityDist[priority] || 0) + 1;\n});\n\n// Top opportunities (sorted by combined score)\nconst topOpportunities = successful\n  .sort((a, b) => (b.combinedScore || 0) - (a.combinedScore || 0))\n  .slice(0, 10)\n  .map(r => ({\n    keyword: r.keyword,\n    difficulty: r.difficultyScore,\n    opportunity: r.opportunityScore,\n    priority: r.priority,\n    combinedScore: r.combinedScore\n  }));\n\n// Collect all SERP titles for master clustering\nconst allSerpTitles = [];\nsuccessful.forEach(result => {\n  (result.serpOverview || []).slice(0, 3).forEach(serp => {\n    if (serp.title) allSerpTitles.push(serp.title);\n  });\n});\n\n// Prepare data for AI clustering\nreturn {\n  config: config,\n  totalKeywords: config.totalKeywords,\n  successfulKeywords: successful.length,\n  failedKeywords: failed.length,\n  failedList: failed,\n  allKeywords: successful.map(r => r.keyword),\n  allRelatedKeywords: allRelatedKeywords.slice(0, 100), // Limit to 100 for token management\n  allSerpTitles: allSerpTitles.slice(0, 50), // Limit to 50\n  aggregateMetrics: {\n    totalSerpResults: totalSerp,\n    avgDifficulty: parseFloat(avgDifficulty.toFixed(2)),\n    avgOpportunity: parseFloat(avgOpportunity.toFixed(2)),\n    totalRelatedKeywords: allRelatedKeywords.length,\n    priorityDistribution: priorityDist\n  },\n  topOpportunities: topOpportunities,\n  individualResults: successful\n};"
+      },
+      "id": "aggregate-results",
+      "name": "Aggregate Results",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2000, 400]
+    },
+    {
+      "parameters": {
+        "resource": "text",
+        "operation": "message",
+        "modelId": "gpt-4o-mini",
+        "messages": {
+          "values": [
+            {
+              "role": "system",
+              "content": "You are an expert SEO strategist. Analyze multiple keywords and their SERP data to identify master themes, content pillars, and strategic clustering. Return ONLY valid JSON with no markdown."
+            },
+            {
+              "role": "user",
+              "content": "=Perform master clustering across these {{ $json.totalKeywords }} keywords:\n\nPrimary Keywords:\n{{ $json.allKeywords.slice(0, 20).join(', ') }}{{ $json.allKeywords.length > 20 ? '... and ' + ($json.allKeywords.length - 20) + ' more' : '' }}\n\nRelated Keywords ({{ $json.allRelatedKeywords.length }} unique):\n{{ $json.allRelatedKeywords.slice(0, 30).map(k => k.keyword).join(', ') }}\n\nTop SERP Patterns:\n{{ $json.allSerpTitles.slice(0, 15).join('\\n') }}\n\nTop Opportunities:\n{{ $json.topOpportunities.slice(0, 5).map(o => `${o.keyword} (Score: ${o.combinedScore})`).join('\\n') }}\n\nProvide strategic analysis in this EXACT JSON structure:\n{\n  \"master_clusters\": [\n    {\n      \"pillar_name\": \"content pillar name\",\n      \"primary_keywords\": [\"kw1\", \"kw2\"],\n      \"supporting_keywords\": [\"kw3\", \"kw4\"],\n      \"recommended_strategy\": \"strategic approach\",\n      \"content_types\": [\"pillar page\", \"blog series\", \"guides\"],\n      \"estimated_difficulty\": \"low|medium|high\",\n      \"strategic_priority\": 1-10\n    }\n  ],\n  \"content_strategy\": {\n    \"quick_wins\": [\"keyword or topic 1\", \"keyword or topic 2\"],\n    \"long_term_targets\": [\"keyword or topic 1\", \"keyword or topic 2\"],\n    \"avoid\": [\"keyword or topic with reasoning\"]\n  },\n  \"market_insights\": {\n    \"dominant_themes\": [\"theme1\", \"theme2\"],\n    \"content_gaps\": [\"gap1\", \"gap2\"],\n    \"competition_level\": \"low|medium|high|mixed\"\n  }\n}"
+            }
+          ]
+        },
+        "options": {
+          "temperature": 0.4,
+          "maxTokens": 2000
+        }
+      },
+      "id": "master-clustering",
+      "name": "Master Clustering",
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 1.4,
+      "position": [2220, 400]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Build comprehensive master report\ntry {\n  const aggregateData = $('Aggregate Results').item.json;\n  const aiResponse = $input.item.json;\n  \n  // Parse AI response\n  let strategy;\n  try {\n    const content = aiResponse.message?.content || aiResponse.text || JSON.stringify(aiResponse);\n    const cleanContent = content.replace(/```(?:json)?\\s*([\\s\\S]*?)```/g, '$1').trim();\n    strategy = JSON.parse(cleanContent);\n  } catch (parseError) {\n    // Fallback strategy\n    strategy = {\n      master_clusters: [\n        {\n          pillar_name: 'Primary Topic Cluster',\n          primary_keywords: aggregateData.allKeywords.slice(0, 5),\n          supporting_keywords: aggregateData.allRelatedKeywords.slice(0, 10).map(k => k.keyword),\n          recommended_strategy: 'Create comprehensive content covering all primary keywords',\n          content_types: ['pillar page', 'blog series'],\n          estimated_difficulty: 'medium',\n          strategic_priority: 5\n        }\n      ],\n      content_strategy: {\n        quick_wins: aggregateData.topOpportunities.slice(0, 3).map(o => o.keyword),\n        long_term_targets: aggregateData.allKeywords.slice(0, 5),\n        avoid: []\n      },\n      market_insights: {\n        dominant_themes: ['General'],\n        content_gaps: ['Various opportunities identified'],\n        competition_level: 'medium'\n      }\n    };\n  }\n  \n  // Build master report\n  const masterReport = {\n    summary: {\n      total_keywords_analyzed: aggregateData.totalKeywords,\n      successful_analyses: aggregateData.successfulKeywords,\n      failed_analyses: aggregateData.failedKeywords,\n      total_related_keywords: aggregateData.aggregateMetrics.totalRelatedKeywords,\n      total_serp_results: aggregateData.aggregateMetrics.totalSerpResults,\n      analysis_timestamp: aggregateData.config.timestamp,\n      workflow_version: '2.0-bulk'\n    },\n    aggregate_scores: {\n      avg_difficulty: aggregateData.aggregateMetrics.avgDifficulty,\n      avg_opportunity: aggregateData.aggregateMetrics.avgOpportunity,\n      priority_distribution: aggregateData.aggregateMetrics.priorityDistribution\n    },\n    top_opportunities: aggregateData.topOpportunities,\n    strategic_clusters: strategy.master_clusters || [],\n    content_strategy: strategy.content_strategy || {},\n    market_insights: strategy.market_insights || {},\n    individual_keyword_results: aggregateData.individualResults.map(r => ({\n      keyword: r.keyword,\n      difficulty_score: r.difficultyScore,\n      opportunity_score: r.opportunityScore,\n      priority: r.priority,\n      combined_score: r.combinedScore,\n      serp_features: r.serpFeatures,\n      total_serp_results: (r.serpOverview || []).length,\n      related_keywords_count: (r.relatedKeywords || []).length,\n      content_gaps_summary: {\n        missing_topics: (r.contentGaps?.missingSubtopics || []).length,\n        thin_areas: (r.contentGaps?.thinContentAreas || []).length\n      }\n    })),\n    failed_keywords: aggregateData.failedList,\n    metadata: {\n      search_config: {\n        depth: aggregateData.config.depth,\n        location: aggregateData.config.location,\n        language: aggregateData.config.language,\n        batch_size: aggregateData.config.batchSize,\n        batch_delay_ms: aggregateData.config.batchDelay\n      },\n      processing_stats: {\n        total_api_calls: aggregateData.successfulKeywords,\n        estimated_cost_usd: parseFloat((aggregateData.successfulKeywords * 0.009).toFixed(2)),\n        keywords_per_minute: parseFloat((aggregateData.successfulKeywords / ((aggregateData.successfulKeywords * aggregateData.config.batchDelay) / 60000)).toFixed(2))\n      }\n    }\n  };\n  \n  return masterReport;\n  \n} catch (error) {\n  throw new Error(`Master report building failed: ${error.message}`);\n}"
+      },
+      "id": "build-master-report",
+      "name": "Build Master Report",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2440, 400]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify($json, null, 2) }}",
+        "options": {
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "name": "X-Workflow-Version",
+                "value": "2.0-bulk"
+              },
+              {
+                "name": "X-Keywords-Processed",
+                "value": "={{ $json.summary.successful_analyses }}"
+              }
+            ]
+          }
+        }
+      },
+      "id": "respond-bulk",
+      "name": "Respond",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [2660, 400]
+    }
+  ],
+  "connections": {
+    "Webhook Trigger": {
+      "main": [
+        [
+          {
+            "node": "Validate Bulk Input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Bulk Input": {
+      "main": [
+        [
+          {
+            "node": "Split Keywords",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Split Keywords": {
+      "main": [
+        [
+          {
+            "node": "Batch Processor",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Batch Processor": {
+      "main": [
+        [
+          {
+            "node": "Fetch SERP",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Aggregate Results",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch SERP": {
+      "main": [
+        [
+          {
+            "node": "Process & Analyze",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Process & Analyze": {
+      "main": [
+        [
+          {
+            "node": "Score Keywords",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Score Keywords": {
+      "main": [
+        [
+          {
+            "node": "Batch Delay",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Batch Delay": {
+      "main": [
+        [
+          {
+            "node": "Batch Processor",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Aggregate Results": {
+      "main": [
+        [
+          {
+            "node": "Master Clustering",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Master Clustering": {
+      "main": [
+        [
+          {
+            "node": "Build Master Report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Master Report": {
+      "main": [
+        [
+          {
+            "node": "Respond",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1",
+    "saveExecutionProgress": false,
+    "saveManualExecutions": false,
+    "executionTimeout": 600
+  },
+  "staticData": null,
+  "tags": ["seo", "keyword-research", "bulk", "optimized"],
+  "triggerCount": 1,
+  "updatedAt": "2025-11-17T00:00:00.000Z",
+  "versionId": "2.0"
+}

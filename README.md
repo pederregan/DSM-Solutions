@@ -1,10 +1,23 @@
-# SCO Keyword Research Tool - n8n Workflow (v2.0 Optimized)
+# SCO Keyword Research Tool - n8n Workflows (v2.0 Optimized)
 
-A **production-optimized** n8n workflow for automated Search-Content-Opportunity (SCO) keyword research. **53% fewer nodes, 40% lower cost, 2x faster execution.**
+**Production-optimized** n8n workflows for automated Search-Content-Opportunity (SCO) keyword research. Available in **single-keyword** and **bulk-processing** versions.
+
+## Available Workflows
+
+1. **Single Keyword Workflow** (`sco-keyword-research-workflow.json`)
+   - Analyze one keyword at a time
+   - 53% fewer nodes, 40% lower cost, 2x faster execution
+   - Perfect for real-time analysis and API integrations
+
+2. **Bulk Processing Workflow** (`sco-bulk-keyword-research.json`) **NEW**
+   - Analyze up to 50 keywords in one request
+   - Safe parallel processing with rate limiting
+   - Master clustering across all keywords
+   - Strategic content planning insights
 
 ## Overview
 
-This workflow performs comprehensive keyword research including:
+These workflows perform comprehensive keyword research including:
 - SERP analysis with authority metrics
 - AI-powered search intent classification
 - Content gap identification
@@ -50,6 +63,240 @@ Webhook → Validate → Fetch SERP → Process & Analyze → AI Analysis → Sc
             Check       Call          Processing        (Intent+       (Score+
                                       (SERP+Gap)        Cluster)       Report)
 ```
+
+---
+
+## Bulk Processing Workflow (NEW)
+
+### Architecture (12 nodes)
+
+1. **Webhook Trigger** - POST endpoint at `/sco-bulk-keyword-research`
+2. **Validate Bulk Input** - Validates array of keywords (max 50), batch settings
+3. **Split Keywords** - Converts array to individual keyword items
+4. **Batch Processor** - Rate limiting controller (3 concurrent by default)
+5. **Fetch SERP** - Parallel SERP fetching with retry logic
+6. **Process & Analyze** - SERP processing + gap analysis per keyword
+7. **Score Keywords** - Calculate difficulty/opportunity scores
+8. **Batch Delay** - Configurable delay between batches (default 2s)
+9. **Aggregate Results** - Merge all keyword results + deduplication
+10. **Master Clustering** - AI-powered strategic clustering across all keywords
+11. **Build Master Report** - Comprehensive master report assembly
+12. **Respond** - JSON response with aggregated insights
+
+### Data Flow
+
+```
+Webhook → Validate → Split → ┌─ Batch Processor (Loop) ─┐ → Aggregate → Master → Build → Respond
+  POST      Array    Items   │  ↓ Fetch SERP (parallel)  │   Results    Cluster  Master   JSON
+ {keywords}                   │  ↓ Process & Analyze      │                               Report
+                              │  ↓ Score Keywords         │
+                              │  ↓ Batch Delay            │
+                              └───────────────────────────┘
+                                (Repeats for each batch)
+```
+
+### Key Features
+
+1. **Safe Parallel Processing**
+   - Configurable batch size (1-10 concurrent requests)
+   - Automatic rate limiting between batches
+   - Prevents API throttling and overload
+
+2. **Master Clustering**
+   - Cross-keyword semantic analysis
+   - Content pillar identification
+   - Strategic priority ranking
+   - Quick wins vs long-term targets
+
+3. **Aggregate Metrics**
+   - Average difficulty across all keywords
+   - Average opportunity scores
+   - Priority distribution (High/Medium/Low)
+   - Top 10 opportunities ranked
+
+4. **Comprehensive Reporting**
+   - Individual keyword results
+   - Master strategic clusters
+   - Content strategy recommendations
+   - Market insights and competition analysis
+
+5. **Error Resilience**
+   - Failed keywords don't stop the workflow
+   - Individual error tracking
+   - Partial results always returned
+
+### Usage
+
+**Endpoint:** `POST /webhook/sco-bulk-keyword-research`
+
+**Request Body:**
+```json
+{
+  "keywords": [
+    "digital marketing agency",
+    "SEO services",
+    "content marketing strategy",
+    "social media management"
+  ],
+  "depth": 20,
+  "location": "us",
+  "language": "en",
+  "batchSize": 3,
+  "batchDelay": 2000
+}
+```
+
+**Parameters:**
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `keywords` | array | ✅ Yes | - | Array of keywords (1-50, max 200 chars each) |
+| `depth` | integer | No | 20 | SERP results per keyword (1-100) |
+| `location` | string | No | "us" | Google country code |
+| `language` | string | No | "en" | Language code |
+| `batchSize` | integer | No | 3 | Concurrent requests (1-10) |
+| `batchDelay` | integer | No | 2000 | Milliseconds between batches (0-10000) |
+
+**Example Request:**
+```bash
+curl -X POST https://your-n8n.com/webhook/sco-bulk-keyword-research \
+  -H "Content-Type: application/json" \
+  -d '{
+    "keywords": [
+      "keyword 1",
+      "keyword 2",
+      "keyword 3"
+    ],
+    "depth": 20,
+    "batchSize": 3,
+    "batchDelay": 2000
+  }'
+```
+
+**Response Format:**
+```json
+{
+  "summary": {
+    "total_keywords_analyzed": 4,
+    "successful_analyses": 4,
+    "failed_analyses": 0,
+    "total_related_keywords": 48,
+    "total_serp_results": 80,
+    "analysis_timestamp": "2025-11-17T12:34:56.789Z",
+    "workflow_version": "2.0-bulk"
+  },
+  "aggregate_scores": {
+    "avg_difficulty": 58.5,
+    "avg_opportunity": 62.3,
+    "priority_distribution": {
+      "High": 2,
+      "Medium": 1,
+      "Low": 1,
+      "Error": 0
+    }
+  },
+  "top_opportunities": [
+    {
+      "keyword": "content marketing strategy",
+      "difficulty": 45,
+      "opportunity": 78,
+      "priority": "High",
+      "combinedScore": 48.75
+    }
+  ],
+  "strategic_clusters": [
+    {
+      "pillar_name": "Digital Marketing Services",
+      "primary_keywords": ["digital marketing agency", "SEO services"],
+      "supporting_keywords": ["local SEO", "SEO audit", "technical SEO"],
+      "recommended_strategy": "Create service pillar page with individual service sub-pages",
+      "content_types": ["pillar page", "service pages", "case studies"],
+      "estimated_difficulty": "medium",
+      "strategic_priority": 9
+    }
+  ],
+  "content_strategy": {
+    "quick_wins": [
+      "content marketing strategy",
+      "social media management pricing"
+    ],
+    "long_term_targets": [
+      "digital marketing agency",
+      "SEO services"
+    ],
+    "avoid": [
+      "Highly competitive branded terms with low conversion potential"
+    ]
+  },
+  "market_insights": {
+    "dominant_themes": ["services", "how-to", "pricing"],
+    "content_gaps": ["case studies", "ROI calculators", "comparison guides"],
+    "competition_level": "medium"
+  },
+  "individual_keyword_results": [
+    {
+      "keyword": "digital marketing agency",
+      "difficulty_score": 72,
+      "opportunity_score": 58,
+      "priority": "Medium",
+      "combined_score": 11.2,
+      "serp_features": {
+        "hasAnswerBox": false,
+        "hasKnowledgeGraph": false,
+        "hasPAA": true,
+        "relatedSearchCount": 8
+      },
+      "total_serp_results": 20,
+      "related_keywords_count": 12,
+      "content_gaps_summary": {
+        "missing_topics": 3,
+        "thin_areas": 2
+      }
+    }
+  ],
+  "failed_keywords": [],
+  "metadata": {
+    "search_config": {
+      "depth": 20,
+      "location": "us",
+      "language": "en",
+      "batch_size": 3,
+      "batch_delay_ms": 2000
+    },
+    "processing_stats": {
+      "total_api_calls": 4,
+      "estimated_cost_usd": 0.04,
+      "keywords_per_minute": 30
+    }
+  }
+}
+```
+
+### Performance & Cost
+
+**Processing Time:**
+- **Formula**: `(Total Keywords / Batch Size) × (Batch Delay / 1000) + (API Response Time per Keyword)`
+- **Example**: 10 keywords, batch size 3, 2s delay = ~13-18 seconds total
+- **50 keywords**: ~90-120 seconds (1.5-2 minutes)
+
+**Cost Calculation:**
+
+| Keywords | SerpAPI | OpenAI | Total |
+|----------|---------|--------|-------|
+| 10 keywords | $0.02-0.05 | $0.015-0.02 | **$0.035-0.07** |
+| 25 keywords | $0.05-0.13 | $0.025-0.03 | **$0.075-0.16** |
+| 50 keywords | $0.10-0.25 | $0.035-0.05 | **$0.135-0.30** |
+
+**Rate Limiting Recommendations:**
+
+| Batch Size | Batch Delay | Keywords/Min | Use Case |
+|------------|-------------|--------------|----------|
+| 1 | 3000ms | ~20 | Conservative, free tier APIs |
+| 3 | 2000ms | ~45 | Balanced (default) |
+| 5 | 1000ms | ~150 | Aggressive, paid APIs only |
+| 10 | 0ms | ~300+ | Maximum speed, premium APIs |
+
+---
 
 ## Setup Instructions
 
@@ -447,7 +694,20 @@ curl https://api.openai.com/v1/models \
 
 ## Changelog
 
-### v2.0 (2025-11-17) - Optimized Release
+### v2.0-bulk (2025-11-17) - Bulk Processing Release
+- 🎉 **NEW**: Bulk keyword research workflow (`sco-bulk-keyword-research.json`)
+- ✅ Process up to 50 keywords in one request
+- ✅ Safe parallel processing with configurable rate limiting
+- ✅ Master clustering across all keywords
+- ✅ Strategic content planning insights (pillars, quick wins, long-term targets)
+- ✅ Aggregate metrics and top opportunities ranking
+- ✅ Individual + master reporting
+- ✅ Error resilience - failed keywords don't stop workflow
+- ✅ Configurable batch size (1-10) and delay (0-10s)
+- ✅ 12-node architecture optimized for bulk processing
+- ✅ Cost-effective: ~$0.035-0.07 for 10 keywords
+
+### v2.0 (2025-11-17) - Single Keyword Optimized Release
 - ✅ Reduced nodes from 15 to 7 (53% reduction)
 - ✅ Combined SerpAPI calls into single request
 - ✅ Merged AI calls (intent + clustering) into one
@@ -459,6 +719,7 @@ curl https://api.openai.com/v1/models \
 - ✅ Added SERP feature detection
 - ✅ Enhanced domain concentration metrics
 - ✅ Improved scoring algorithm
+- ✅ Location and language support
 
 ### v1.0 (2025-11-17) - Initial Release
 - ✅ Basic workflow with 15 nodes
@@ -481,4 +742,4 @@ MIT License - Free for commercial and personal use.
 
 ---
 
-**Built with n8n** | **Optimized for Production** | **v2.0**
+**Built with n8n** | **Optimized for Production** | **Single + Bulk Workflows** | **v2.0**
