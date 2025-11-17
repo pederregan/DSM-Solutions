@@ -9,11 +9,17 @@
    - 53% fewer nodes, 40% lower cost, 2x faster execution
    - Perfect for real-time analysis and API integrations
 
-2. **Bulk Processing Workflow** (`sco-bulk-keyword-research.json`) **NEW**
+2. **Bulk Processing Workflow** (`sco-bulk-keyword-research.json`)
    - Analyze up to 50 keywords in one request
    - Safe parallel processing with rate limiting
    - Master clustering across all keywords
    - Strategic content planning insights
+
+3. **Competitor Domain Analyzer** (`competitor-domain-analyzer.json`) **NEW**
+   - Extract competitor's ranking keywords automatically
+   - Run complete SCO analysis on competitor keywords
+   - Identify content gaps and opportunities
+   - Strategic competitive intelligence reporting
 
 ## Overview
 
@@ -295,6 +301,326 @@ curl -X POST https://your-n8n.com/webhook/sco-bulk-keyword-research \
 | 3 | 2000ms | ~45 | Balanced (default) |
 | 5 | 1000ms | ~150 | Aggressive, paid APIs only |
 | 10 | 0ms | ~300+ | Maximum speed, premium APIs |
+
+---
+
+## Competitor Domain Analyzer (NEW)
+
+### Architecture (14 nodes)
+
+1. **Webhook Trigger** - POST endpoint at `/competitor-domain-analyzer`
+2. **Validate Input** - Domain validation and configuration
+3. **Extract Competitor Keywords** - SerpAPI site: search to find competitor pages
+4. **Process & Filter Keywords** - Extract and clean keywords from competitor pages
+5. **Split Keywords** - Convert to individual items for analysis
+6. **Batch Processor** - Rate limiting controller
+7. **Fetch SERP** - Parallel SERP fetching per keyword
+8. **Process & Analyze** - SERP processing + competitive positioning
+9. **Score Keywords** - Difficulty/opportunity scoring with competitive insights
+10. **Batch Delay** - Configurable delay between batches
+11. **Aggregate Results** - Merge results + competitive metrics
+12. **Competitive Gap Analysis** - AI-powered strategic analysis
+13. **Build Competitor Report** - Comprehensive competitor intelligence report
+14. **Respond** - JSON response with competitive insights
+
+### Data Flow
+
+```
+Webhook → Validate → Extract → Process → Split → ┌─ Batch Processor (Loop) ─┐ → Aggregate → Gap → Build → Respond
+  POST      Domain    Comp.     Filter   Items   │  ↓ Fetch SERP (parallel)  │   Results    Analysis Report   JSON
+ {domain}             Keywords  Keywords          │  ↓ Process & Analyze      │
+                                                  │  ↓ Score Keywords         │
+                                                  │  ↓ Batch Delay            │
+                                                  └───────────────────────────┘
+```
+
+### Key Features
+
+1. **Automatic Keyword Extraction**
+   - Discovers competitor's ranking keywords via SerpAPI
+   - Extracts from titles and page content
+   - Deduplicates and filters (max 500 keywords)
+   - Tracks competitor's ranking positions
+
+2. **Competitive Analysis**
+   - Identifies where competitor ranks (top 3, top 10, page 2+)
+   - Calculates ranking distribution
+   - Highlights competitor strengths and weaknesses
+   - Finds keywords where competitor ranks poorly
+
+3. **Strategic Gap Identification**
+   - Content topics competitor owns
+   - Keywords they rank for but weakly
+   - Missing opportunities they haven't targeted
+   - Your competitive advantages
+
+4. **AI-Powered Insights**
+   - Competitive positioning assessment
+   - Content pillar recommendations
+   - Attack strategies for key topics
+   - Immediate, 30-day, and 90-day action plans
+
+5. **Actionable Outputs**
+   - Quick wins (low difficulty, competitor weak/absent)
+   - Long-term targets (high value, strategic)
+   - Competitor threats (where they dominate)
+   - Gap opportunities (what they're missing)
+
+### Usage
+
+**Endpoint:** `POST /webhook/competitor-domain-analyzer`
+
+**Request Body:**
+```json
+{
+  "domain": "example.com",
+  "maxKeywords": 200,
+  "depth": 20,
+  "batchSize": 3,
+  "batchDelay": 2000
+}
+```
+
+**Parameters:**
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `domain` | string | ✅ Yes | - | Competitor domain (e.g., "example.com") |
+| `maxKeywords` | integer | No | 200 | Max keywords to analyze (1-500) |
+| `depth` | integer | No | 20 | SERP results per keyword (1-100) |
+| `batchSize` | integer | No | 3 | Concurrent requests (1-10) |
+| `batchDelay` | integer | No | 2000 | Milliseconds between batches (0-10000) |
+
+**Example Request:**
+```bash
+curl -X POST https://your-n8n.com/webhook/competitor-domain-analyzer \
+  -H "Content-Type: application/json" \
+  -d '{
+    "domain": "smiledesignnyc.com",
+    "maxKeywords": 100,
+    "depth": 20,
+    "batchSize": 3,
+    "batchDelay": 2000
+  }'
+```
+
+**Response Format:**
+```json
+{
+  "domain": "smiledesignnyc.com",
+  "analysis_summary": {
+    "total_keywords_extracted": 100,
+    "total_keywords_analyzed": 98,
+    "failed_analyses": 2,
+    "analysis_timestamp": "2025-11-17T12:34:56.789Z"
+  },
+  "ranking_overview": {
+    "distribution": {
+      "top3": 15,
+      "top10": 28,
+      "page2": 35,
+      "notRanking": 20
+    },
+    "percentage_top10": 43.88
+  },
+  "aggregate_scores": {
+    "avgDifficulty": 62.3,
+    "avgOpportunity": 58.7,
+    "priorityDistribution": {
+      "High": 12,
+      "Medium": 35,
+      "Low": 49,
+      "Error": 2
+    }
+  },
+  "competitive_positioning": {
+    "competitor_strength_level": "moderate",
+    "overall_vulnerability": "medium",
+    "key_advantages": [
+      "Strong local SEO presence",
+      "Excellent branded content",
+      "High-quality backlink profile"
+    ],
+    "key_weaknesses": [
+      "Thin content on procedure pages",
+      "Missing FAQ and how-to content",
+      "Weak blog content strategy"
+    ]
+  },
+  "top_opportunities": [
+    {
+      "keyword": "cosmetic dentistry cost NYC",
+      "difficulty": 45,
+      "opportunity": 78,
+      "priority": "High",
+      "combinedScore": 48.75,
+      "competitorPosition": 15,
+      "competitiveInsight": "Weak - Page 2+"
+    }
+  ],
+  "quick_wins": [
+    "dental veneers cost",
+    "teeth whitening near me",
+    "cosmetic dentistry before and after"
+  ],
+  "long_term_targets": [
+    "best cosmetic dentist NYC",
+    "smile makeover NYC",
+    "porcelain veneers NYC"
+  ],
+  "competitor_strengths": [
+    {
+      "keyword": "cosmetic dentist NYC",
+      "position": 2,
+      "difficulty": 78,
+      "opportunity": 55
+    }
+  ],
+  "competitor_weaknesses": [
+    {
+      "keyword": "affordable cosmetic dentistry",
+      "position": 18,
+      "difficulty": 52,
+      "opportunity": 72
+    }
+  ],
+  "content_pillars": [
+    {
+      "pillar_name": "Cosmetic Procedures",
+      "priority_keywords": ["veneers NYC", "teeth whitening", "smile makeover"],
+      "competitor_position": "strong",
+      "attack_strategy": "Create comprehensive procedure guides with pricing transparency",
+      "estimated_effort": "high"
+    },
+    {
+      "pillar_name": "Cost & Pricing",
+      "priority_keywords": ["cosmetic dentistry cost", "veneers price"],
+      "competitor_position": "weak",
+      "attack_strategy": "Launch transparent pricing pages with cost calculators",
+      "estimated_effort": "low"
+    }
+  ],
+  "gap_opportunities": [
+    {
+      "gap_type": "Educational content - Before/After galleries",
+      "keywords": ["teeth whitening before after", "veneers transformation"],
+      "why_opportunity": "Competitor lacks visual case studies",
+      "recommended_action": "Create comprehensive gallery with real patient results"
+    }
+  ],
+  "competitive_threats": [
+    {
+      "threat": "Dominant local rankings for branded terms",
+      "keywords_at_risk": ["cosmetic dentist NYC", "NYC smile design"],
+      "mitigation_strategy": "Focus on long-tail local variations and procedure-specific terms"
+    }
+  ],
+  "strategic_recommendations": {
+    "immediate_actions": [
+      "Create pricing transparency pages for top procedures",
+      "Launch FAQ section answering common cost questions",
+      "Develop before/after gallery with 50+ cases"
+    ],
+    "30_day_goals": [
+      "Publish 10 procedure-specific guides",
+      "Optimize for 20 quick-win keywords",
+      "Build backlinks to new content"
+    ],
+    "90_day_goals": [
+      "Launch comprehensive smile makeover pillar page",
+      "Create video content for top procedures",
+      "Develop cost calculator tools"
+    ]
+  },
+  "individual_keyword_results": [
+    {
+      "keyword": "cosmetic dentist NYC",
+      "competitor_position": 2,
+      "competitive_insight": "Strong - Top 3",
+      "difficulty_score": 78,
+      "opportunity_score": 55,
+      "priority": "Medium",
+      "combined_score": 4.3,
+      "serp_features_summary": {
+        "total_results": 20,
+        "high_authority_count": 4,
+        "unique_domains": 18
+      },
+      "content_gaps_summary": {
+        "missing_topics": 2,
+        "thin_areas": 3
+      }
+    }
+  ],
+  "failed_keywords": [],
+  "metadata": {
+    "workflow_version": "2.1-competitor",
+    "estimated_cost_usd": 0.78,
+    "processing_time_estimate": "3 minutes"
+  }
+}
+```
+
+### Performance & Cost
+
+**Processing Time:**
+- **Formula**: Same as bulk workflow + initial keyword extraction (~10-15s)
+- **100 keywords**: ~35-45 seconds
+- **200 keywords**: ~65-80 seconds
+- **500 keywords**: ~3-4 minutes
+
+**Cost Calculation:**
+
+| Keywords Analyzed | SerpAPI | OpenAI | **Total** |
+|-------------------|---------|--------|-----------|
+| 50 keywords | $0.10-0.25 | $0.015-0.02 | **$0.115-0.27** |
+| 100 keywords | $0.20-0.50 | $0.020-0.03 | **$0.22-0.53** |
+| 200 keywords | $0.40-1.00 | $0.030-0.04 | **$0.43-1.04** |
+
+**Note:** Includes initial competitor keyword extraction API call (~$0.002-0.005)
+
+### Use Cases
+
+1. **Competitive Intelligence**
+   - Understand competitor's SEO strategy
+   - Identify their content pillars
+   - Find weaknesses in their approach
+
+2. **Content Gap Analysis**
+   - Discover topics they're missing
+   - Find keywords they rank for weakly
+   - Identify quick-win opportunities
+
+3. **Strategic Planning**
+   - Prioritize content creation
+   - Plan attack strategies for key topics
+   - Set 30/60/90 day goals
+
+4. **Client Reporting**
+   - Automated competitive analysis
+   - Visual competitive positioning
+   - Strategic recommendations
+
+### Limitations & Notes
+
+**Important:** The competitor keyword extraction uses SerpAPI's `site:` search, which:
+- Returns pages, not explicit keywords
+- Keywords are inferred from titles/content
+- May not capture all ranking keywords
+
+**For Production:**
+Consider integrating:
+- **DataForSEO** - More accurate keyword data
+- **SEMrush API** - Competitor keyword database
+- **Ahrefs API** - Comprehensive backlink and keyword data
+
+These provide actual ranking keywords with search volume, position tracking, and traffic estimates.
+
+**Current Implementation:**
+- Best for discovering content themes and topics
+- Good for identifying competitor's content strategy
+- Suitable for competitive gap analysis
+- Limited keyword volume/CPC data
 
 ---
 
@@ -693,6 +1019,20 @@ curl https://api.openai.com/v1/models \
 ```
 
 ## Changelog
+
+### v2.1-competitor (2025-11-17) - Competitor Analysis Release
+- 🎉 **NEW**: Competitor Domain Analyzer workflow (`competitor-domain-analyzer.json`)
+- ✅ Automatic competitor keyword extraction via SerpAPI
+- ✅ Complete SCO analysis on competitor's ranking keywords
+- ✅ Competitive positioning assessment
+- ✅ Strategic gap identification (strengths, weaknesses, opportunities, threats)
+- ✅ AI-powered competitive insights and recommendations
+- ✅ Quick wins vs long-term targets identification
+- ✅ Content pillar recommendations with attack strategies
+- ✅ 30/60/90 day strategic action plans
+- ✅ 14-node architecture with rate-limited batch processing
+- ✅ Cost-effective: ~$0.22-0.53 for 100 competitor keywords
+- ✅ Ranking distribution tracking (top 3, top 10, page 2+)
 
 ### v2.0-bulk (2025-11-17) - Bulk Processing Release
 - 🎉 **NEW**: Bulk keyword research workflow (`sco-bulk-keyword-research.json`)

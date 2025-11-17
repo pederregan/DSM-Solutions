@@ -1,0 +1,426 @@
+{
+  "name": "Competitor Domain Analyzer",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "competitor-domain-analyzer",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "webhook-trigger-competitor",
+      "name": "Webhook Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1.1,
+      "position": [240, 500],
+      "webhookId": "competitor-domain-analyzer"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Validate competitor domain analyzer input\ntry {\n  const body = $input.item.json.body || $input.item.json;\n  \n  // Validate domain\n  if (!body.domain || typeof body.domain !== 'string') {\n    throw new Error('Invalid input: domain is required and must be a string');\n  }\n  \n  // Clean domain (remove protocol, www, trailing slashes)\n  let domain = body.domain.trim()\n    .replace(/^https?:\\/\\//, '')\n    .replace(/^www\\./, '')\n    .replace(/\\/$/, '')\n    .split('/')[0]; // Take only hostname\n  \n  if (domain.length === 0) {\n    throw new Error('Invalid input: domain cannot be empty after cleaning');\n  }\n  \n  // Validate domain format (basic)\n  if (!domain.includes('.')) {\n    throw new Error('Invalid input: domain must contain at least one dot (e.g., example.com)');\n  }\n  \n  // Validate maxKeywords\n  let maxKeywords = 200; // default\n  if (body.maxKeywords !== undefined) {\n    const parsed = parseInt(body.maxKeywords);\n    if (isNaN(parsed) || parsed < 1) {\n      throw new Error('Invalid input: maxKeywords must be a positive number');\n    }\n    maxKeywords = Math.min(parsed, 500); // cap at 500\n  }\n  \n  // Validate depth\n  let depth = 20; // default\n  if (body.depth !== undefined) {\n    const parsed = parseInt(body.depth);\n    if (isNaN(parsed) || parsed < 1) {\n      throw new Error('Invalid input: depth must be a positive number');\n    }\n    depth = Math.min(parsed, 100); // cap at 100\n  }\n  \n  // Validate batchSize\n  let batchSize = 3; // default\n  if (body.batchSize !== undefined) {\n    const parsed = parseInt(body.batchSize);\n    if (!isNaN(parsed) && parsed >= 1 && parsed <= 10) {\n      batchSize = parsed;\n    }\n  }\n  \n  // Validate batchDelay\n  let batchDelay = 2000; // default\n  if (body.batchDelay !== undefined) {\n    const parsed = parseInt(body.batchDelay);\n    if (!isNaN(parsed) && parsed >= 0 && parsed <= 10000) {\n      batchDelay = parsed;\n    }\n  }\n  \n  return {\n    domain: domain,\n    maxKeywords: maxKeywords,\n    depth: depth,\n    batchSize: batchSize,\n    batchDelay: batchDelay,\n    location: body.location || 'us',\n    language: body.language || 'en',\n    timestamp: new Date().toISOString()\n  };\n  \n} catch (error) {\n  throw new Error(`Validation failed: ${error.message}`);\n}"
+      },
+      "id": "validate-competitor-input",
+      "name": "Validate Input",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [460, 500]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "https://serpapi.com/search",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "serpApiApi",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "q",
+              "value": "=site:{{ $json.domain }}"
+            },
+            {
+              "name": "num",
+              "value": "={{ Math.min($json.maxKeywords, 100) }}"
+            },
+            {
+              "name": "engine",
+              "value": "google"
+            },
+            {
+              "name": "gl",
+              "value": "={{ $json.location }}"
+            },
+            {
+              "name": "hl",
+              "value": "={{ $json.language }}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 30000,
+          "retry": {
+            "maxRetries": 2,
+            "retryOnStatus": [429, 500, 502, 503, 504]
+          }
+        }
+      },
+      "id": "extract-competitor-keywords",
+      "name": "Extract Competitor Keywords",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [680, 500]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Process and filter extracted competitor keywords\ntry {\n  const serpData = $input.item.json;\n  const config = $('Validate Input').item.json;\n  const organicResults = serpData.organic_results || [];\n  \n  if (organicResults.length === 0) {\n    throw new Error(`No ranking keywords found for domain: ${config.domain}`);\n  }\n  \n  // Extract keywords from organic results\n  // Note: SerpAPI site: search returns pages, we need to infer keywords from titles/snippets\n  // For better results, consider using DataForSEO or SEMrush API in production\n  \n  const extractedKeywords = [];\n  const keywordSet = new Set();\n  \n  organicResults.forEach((result, index) => {\n    // Extract potential keywords from title and snippet\n    const title = (result.title || '').toLowerCase();\n    const snippet = (result.snippet || '').toLowerCase();\n    const link = result.link || '';\n    const position = result.position || index + 1;\n    \n    // Simple keyword extraction from title (split by common separators)\n    const titleWords = title.split(/[|\\-–—:•]/).map(s => s.trim()).filter(s => s.length > 3);\n    \n    titleWords.forEach(keyword => {\n      // Basic filtering\n      if (keyword.length > 200) return;\n      if (keyword.length < 3) return;\n      if (/^[0-9]+$/.test(keyword)) return; // Skip pure numbers\n      \n      const normalizedKeyword = keyword.trim();\n      if (!keywordSet.has(normalizedKeyword)) {\n        keywordSet.add(normalizedKeyword);\n        extractedKeywords.push({\n          keyword: normalizedKeyword,\n          source_url: link,\n          ranking_position: position,\n          source: 'serp_title'\n        });\n      }\n    });\n    \n    // Also use the full title as a keyword if it's reasonable length\n    if (title.length > 3 && title.length <= 200 && !keywordSet.has(title)) {\n      keywordSet.add(title);\n      extractedKeywords.push({\n        keyword: title,\n        source_url: link,\n        ranking_position: position,\n        source: 'full_title'\n      });\n    }\n  });\n  \n  // Limit to maxKeywords\n  const limitedKeywords = extractedKeywords.slice(0, config.maxKeywords);\n  \n  if (limitedKeywords.length === 0) {\n    throw new Error('No valid keywords extracted from competitor domain');\n  }\n  \n  return {\n    domain: config.domain,\n    totalPagesFound: organicResults.length,\n    totalKeywordsExtracted: limitedKeywords.length,\n    keywords: limitedKeywords.map(k => k.keyword),\n    keywordDetails: limitedKeywords,\n    depth: config.depth,\n    batchSize: config.batchSize,\n    batchDelay: config.batchDelay,\n    location: config.location,\n    language: config.language,\n    timestamp: config.timestamp\n  };\n  \n} catch (error) {\n  throw new Error(`Keyword extraction failed: ${error.message}`);\n}"
+      },
+      "id": "process-filter-keywords",
+      "name": "Process & Filter Keywords",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [900, 500]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Split keywords into individual items for SCO analysis\nconst data = $input.item.json;\nconst keywords = data.keywords || [];\n\nreturn keywords.map((keyword, index) => {\n  const details = data.keywordDetails[index] || {};\n  return {\n    keyword: keyword,\n    competitorDomain: data.domain,\n    rankingPosition: details.ranking_position || null,\n    sourceUrl: details.source_url || null,\n    depth: data.depth,\n    location: data.location,\n    language: data.language,\n    batchSize: data.batchSize,\n    batchDelay: data.batchDelay,\n    totalKeywords: keywords.length,\n    timestamp: data.timestamp\n  };\n});"
+      },
+      "id": "split-keywords-competitor",
+      "name": "Split Keywords",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1120, 500]
+    },
+    {
+      "parameters": {
+        "batchSize": "={{ $json.batchSize }}",
+        "options": {}
+      },
+      "id": "batch-processor-competitor",
+      "name": "Batch Processor",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [1340, 500]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "https://serpapi.com/search",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "serpApiApi",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "q",
+              "value": "={{ $json.keyword }}"
+            },
+            {
+              "name": "num",
+              "value": "={{ $json.depth }}"
+            },
+            {
+              "name": "engine",
+              "value": "google"
+            },
+            {
+              "name": "gl",
+              "value": "={{ $json.location }}"
+            },
+            {
+              "name": "hl",
+              "value": "={{ $json.language }}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 30000,
+          "retry": {
+            "maxRetries": 2,
+            "retryOnStatus": [429, 500, 502, 503, 504]
+          }
+        }
+      },
+      "id": "fetch-serp-competitor",
+      "name": "Fetch SERP",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1560, 500]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Process SERP data and perform gap analysis (same as bulk workflow)\ntry {\n  const serpData = $input.item.json;\n  const keyword = $('Batch Processor').item.json.keyword;\n  const competitorDomain = $('Batch Processor').item.json.competitorDomain;\n  const rankingPosition = $('Batch Processor').item.json.rankingPosition;\n  const depth = $('Batch Processor').item.json.depth;\n  \n  const organicResults = serpData.organic_results || [];\n  const relatedSearches = serpData.related_searches || [];\n  const relatedQuestions = serpData.related_questions || [];\n  \n  // Process SERP overview\n  const serpOverview = organicResults.map((result, index) => {\n    let domain = '';\n    try {\n      if (result.link) {\n        domain = new URL(result.link).hostname.replace('www.', '');\n      }\n    } catch (e) {\n      domain = result.displayed_link || 'unknown';\n    }\n    \n    return {\n      rank: index + 1,\n      title: result.title || '',\n      snippet: result.snippet || '',\n      link: result.link || '',\n      domain: domain,\n      isCompetitor: domain === competitorDomain || domain.includes(competitorDomain)\n    };\n  });\n  \n  // Find competitor's ranking\n  const competitorRanking = serpOverview.find(s => s.isCompetitor);\n  const actualPosition = competitorRanking ? competitorRanking.rank : null;\n  \n  // Extract related keywords\n  const relatedKeywords = [];\n  \n  relatedSearches.forEach(item => {\n    if (item.query) {\n      relatedKeywords.push({\n        keyword: item.query,\n        source: 'related_search'\n      });\n    }\n  });\n  \n  relatedQuestions.forEach(item => {\n    if (item.question) {\n      relatedKeywords.push({\n        keyword: item.question,\n        source: 'people_also_ask'\n      });\n    }\n  });\n  \n  // Calculate authority metrics\n  const domainCounts = {};\n  serpOverview.forEach(item => {\n    domainCounts[item.domain] = (domainCounts[item.domain] || 0) + 1;\n  });\n  \n  const highAuthorityDomains = [\n    'wikipedia.org', 'youtube.com', 'amazon.com', 'facebook.com',\n    'linkedin.com', 'twitter.com', 'instagram.com', 'reddit.com',\n    'quora.com', 'pinterest.com', 'medium.com', 'forbes.com',\n    'nytimes.com', 'washingtonpost.com', 'bbc.com', 'cnn.com'\n  ];\n  \n  const authorityCount = serpOverview.filter(item => \n    highAuthorityDomains.some(domain => item.domain.includes(domain))\n  ).length;\n  \n  const authorityMetrics = {\n    highAuthorityCount: authorityCount,\n    uniqueDomains: Object.keys(domainCounts).length,\n    totalResults: serpOverview.length,\n    domainConcentration: serpOverview.length > 0 ? Math.max(...Object.values(domainCounts)) / serpOverview.length : 0,\n    competitorPresent: !!competitorRanking,\n    competitorPosition: actualPosition\n  };\n  \n  // Content theme analysis\n  const contentThemes = {};\n  const patterns = [\n    { name: 'how-to', keywords: ['how to', 'guide', 'tutorial', 'step', 'learn', 'instructions'] },\n    { name: 'comparison', keywords: ['vs', 'versus', 'compare', 'best', 'top', 'review'] },\n    { name: 'pricing', keywords: ['price', 'cost', 'pricing', 'cheap', 'expensive', 'affordable', 'free'] },\n    { name: 'definition', keywords: ['what is', 'definition', 'meaning', 'explain', 'overview'] },\n    { name: 'list', keywords: ['list', 'types', 'kinds', 'examples', 'ways'] },\n    { name: 'location', keywords: ['near me', 'location', 'where', 'local', 'nearby'] },\n    { name: 'reviews', keywords: ['review', 'rating', 'testimonial', 'customer', 'feedback'] },\n    { name: 'benefits', keywords: ['benefit', 'advantage', 'why', 'reason', 'pros'] }\n  ];\n  \n  serpOverview.forEach(item => {\n    const content = `${item.title} ${item.snippet}`.toLowerCase();\n    patterns.forEach(pattern => {\n      if (pattern.keywords.some(kw => content.includes(kw))) {\n        contentThemes[pattern.name] = (contentThemes[pattern.name] || 0) + 1;\n      }\n    });\n  });\n  \n  // Identify content gaps\n  const totalResults = serpOverview.length;\n  const missingSubtopics = [];\n  const thinContentAreas = [];\n  \n  patterns.forEach(pattern => {\n    const count = contentThemes[pattern.name] || 0;\n    const coverage = totalResults > 0 ? (count / totalResults) * 100 : 0;\n    \n    if (coverage === 0) {\n      missingSubtopics.push({\n        theme: pattern.name,\n        coverage: 0,\n        opportunity: 'high'\n      });\n    } else if (coverage < 20) {\n      thinContentAreas.push({\n        theme: pattern.name,\n        coverage: parseFloat(coverage.toFixed(1)),\n        opportunity: 'medium'\n      });\n    }\n  });\n  \n  return {\n    keyword: keyword,\n    competitorDomain: competitorDomain,\n    expectedPosition: rankingPosition,\n    actualPosition: actualPosition,\n    positionVerified: actualPosition === rankingPosition,\n    depth: depth,\n    serpOverview: serpOverview,\n    relatedKeywords: relatedKeywords,\n    authorityMetrics: authorityMetrics,\n    contentGaps: {\n      missingSubtopics: missingSubtopics,\n      thinContentAreas: thinContentAreas,\n      contentThemes: contentThemes\n    }\n  };\n  \n} catch (error) {\n  // Return error result for this keyword\n  return {\n    keyword: $('Batch Processor').item.json.keyword,\n    competitorDomain: $('Batch Processor').item.json.competitorDomain,\n    error: true,\n    errorMessage: error.message,\n    serpOverview: [],\n    relatedKeywords: [],\n    authorityMetrics: {},\n    contentGaps: {}\n  };\n}"
+      },
+      "id": "process-analyze-competitor",
+      "name": "Process & Analyze",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1780, 500]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Calculate difficulty and opportunity scores\ntry {\n  const data = $input.item.json;\n  \n  // Skip if error\n  if (data.error) {\n    return {\n      ...data,\n      difficultyScore: null,\n      opportunityScore: null,\n      priority: 'Error'\n    };\n  }\n  \n  const serpOverview = data.serpOverview || [];\n  const authorityMetrics = data.authorityMetrics || {};\n  const contentGaps = data.contentGaps || {};\n  const competitorPresent = authorityMetrics.competitorPresent || false;\n  const competitorPosition = authorityMetrics.competitorPosition || null;\n  \n  // === DIFFICULTY SCORE (0-100) ===\n  let difficultyScore = 0;\n  \n  const highAuthorityRatio = authorityMetrics.highAuthorityCount / Math.max(authorityMetrics.totalResults, 1);\n  difficultyScore += highAuthorityRatio * 35;\n  \n  const concentration = authorityMetrics.domainConcentration || 0;\n  if (concentration > 0.3) {\n    difficultyScore += 25;\n  } else if (concentration > 0.15) {\n    difficultyScore += 15;\n  } else {\n    difficultyScore += 5;\n  }\n  \n  const saturatedThemes = Object.keys(contentGaps.contentThemes || {}).length;\n  difficultyScore += Math.min(saturatedThemes * 2, 20);\n  \n  difficultyScore += 12; // Default intent competition\n  \n  difficultyScore = Math.min(Math.round(difficultyScore), 100);\n  \n  // === OPPORTUNITY SCORE (0-100) ===\n  let opportunityScore = 0;\n  \n  const missingCount = (contentGaps.missingSubtopics || []).length;\n  const thinCount = (contentGaps.thinContentAreas || []).length;\n  opportunityScore += Math.min(missingCount * 8 + thinCount * 4, 35);\n  \n  const keywordCount = (data.relatedKeywords || []).length;\n  opportunityScore += Math.min(keywordCount * 1.5, 25);\n  \n  opportunityScore += 18; // Default intent alignment\n  \n  if (difficultyScore < 35) {\n    opportunityScore += 15;\n  } else if (difficultyScore < 55) {\n    opportunityScore += 10;\n  } else if (difficultyScore < 70) {\n    opportunityScore += 5;\n  }\n  \n  // Bonus if competitor ranks but position is weak\n  if (competitorPresent && competitorPosition > 5) {\n    opportunityScore += 10; // They rank but not well - opportunity to outrank\n  }\n  \n  opportunityScore = Math.min(Math.round(opportunityScore), 100);\n  \n  // === PRIORITY ===\n  let priority = 'Low';\n  const combinedScore = opportunityScore - (difficultyScore * 0.65);\n  \n  if (combinedScore > 35 && opportunityScore > 65) {\n    priority = 'High';\n  } else if (combinedScore > 15 && opportunityScore > 45) {\n    priority = 'Medium';\n  }\n  \n  // Competitive insight\n  let competitiveInsight = 'Not ranking';\n  if (competitorPresent) {\n    if (competitorPosition <= 3) {\n      competitiveInsight = 'Strong - Top 3';\n    } else if (competitorPosition <= 10) {\n      competitiveInsight = 'Moderate - Page 1';\n    } else {\n      competitiveInsight = 'Weak - Page 2+';\n    }\n  }\n  \n  return {\n    ...data,\n    difficultyScore: difficultyScore,\n    opportunityScore: opportunityScore,\n    priority: priority,\n    combinedScore: parseFloat(combinedScore.toFixed(2)),\n    competitiveInsight: competitiveInsight\n  };\n  \n} catch (error) {\n  return {\n    ...data,\n    difficultyScore: null,\n    opportunityScore: null,\n    priority: 'Error',\n    scoringError: error.message\n  };\n}"
+      },
+      "id": "score-keywords-competitor",
+      "name": "Score Keywords",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2000, 500]
+    },
+    {
+      "parameters": {
+        "amount": "={{ $('Batch Processor').item.json.batchDelay }}",
+        "unit": "ms"
+      },
+      "id": "batch-delay-competitor",
+      "name": "Batch Delay",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [2220, 500]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Aggregate all competitor keyword analysis results\nconst allResults = $input.all();\nconst config = $('Process & Filter Keywords').item.json;\n\nconst successful = [];\nconst failed = [];\n\nallResults.forEach(item => {\n  const data = item.json;\n  if (data.error) {\n    failed.push({\n      keyword: data.keyword,\n      error: data.errorMessage || data.scoringError || 'Unknown error'\n    });\n  } else {\n    successful.push(data);\n  }\n});\n\n// Ranking analysis\nconst rankingDistribution = {\n  top3: 0,\n  top10: 0,\n  page2: 0,\n  notRanking: 0\n};\n\nsuccessful.forEach(result => {\n  const pos = result.actualPosition;\n  if (!pos) {\n    rankingDistribution.notRanking++;\n  } else if (pos <= 3) {\n    rankingDistribution.top3++;\n  } else if (pos <= 10) {\n    rankingDistribution.top10++;\n  } else {\n    rankingDistribution.page2++;\n  }\n});\n\n// Aggregate metrics\nconst avgDifficulty = successful.length > 0 \n  ? successful.reduce((sum, r) => sum + (r.difficultyScore || 0), 0) / successful.length \n  : 0;\n  \nconst avgOpportunity = successful.length > 0\n  ? successful.reduce((sum, r) => sum + (r.opportunityScore || 0), 0) / successful.length\n  : 0;\n\n// Priority distribution\nconst priorityDist = { High: 0, Medium: 0, Low: 0, Error: 0 };\nallResults.forEach(item => {\n  const priority = item.json.priority || 'Error';\n  priorityDist[priority] = (priorityDist[priority] || 0) + 1;\n});\n\n// Top opportunities (keywords with high opportunity, low difficulty)\nconst topOpportunities = successful\n  .filter(r => r.difficultyScore < 60 && r.opportunityScore > 50)\n  .sort((a, b) => (b.combinedScore || 0) - (a.combinedScore || 0))\n  .slice(0, 20)\n  .map(r => ({\n    keyword: r.keyword,\n    difficulty: r.difficultyScore,\n    opportunity: r.opportunityScore,\n    priority: r.priority,\n    combinedScore: r.combinedScore,\n    competitorPosition: r.actualPosition,\n    competitiveInsight: r.competitiveInsight\n  }));\n\n// Competitor strengths (where they rank well)\nconst competitorStrengths = successful\n  .filter(r => r.actualPosition && r.actualPosition <= 5)\n  .sort((a, b) => a.actualPosition - b.actualPosition)\n  .slice(0, 15)\n  .map(r => ({\n    keyword: r.keyword,\n    position: r.actualPosition,\n    difficulty: r.difficultyScore,\n    opportunity: r.opportunityScore\n  }));\n\n// Competitor weaknesses (where they rank poorly)\nconst competitorWeaknesses = successful\n  .filter(r => r.actualPosition && r.actualPosition > 10)\n  .sort((a, b) => (b.opportunityScore || 0) - (a.opportunityScore || 0))\n  .slice(0, 15)\n  .map(r => ({\n    keyword: r.keyword,\n    position: r.actualPosition,\n    difficulty: r.difficultyScore,\n    opportunity: r.opportunityScore\n  }));\n\n// Quick wins (low difficulty, competitor not ranking well or at all)\nconst quickWins = successful\n  .filter(r => r.difficultyScore < 50 && r.opportunityScore > 55 && (!r.actualPosition || r.actualPosition > 10))\n  .sort((a, b) => (b.opportunityScore || 0) - (a.opportunityScore || 0))\n  .slice(0, 10)\n  .map(r => r.keyword);\n\n// Long-term targets (high difficulty but high value)\nconst longTermTargets = successful\n  .filter(r => r.difficultyScore >= 60 && r.opportunityScore > 50)\n  .sort((a, b) => (b.opportunityScore || 0) - (a.opportunityScore || 0))\n  .slice(0, 10)\n  .map(r => r.keyword);\n\n// Collect unique related keywords\nconst allRelatedKeywords = [];\nconst relatedKeywordSet = new Set();\n\nsuccessful.forEach(result => {\n  (result.relatedKeywords || []).forEach(rk => {\n    const key = rk.keyword.toLowerCase();\n    if (!relatedKeywordSet.has(key)) {\n      relatedKeywordSet.add(key);\n      allRelatedKeywords.push(rk);\n    }\n  });\n});\n\n// Prepare data for competitive gap analysis AI\nconst topSerpTitles = [];\nsuccessful.slice(0, 30).forEach(result => {\n  (result.serpOverview || []).slice(0, 2).forEach(serp => {\n    if (serp.title) topSerpTitles.push(serp.title);\n  });\n});\n\nreturn {\n  domain: config.domain,\n  totalKeywordsExtracted: config.totalKeywordsExtracted,\n  totalKeywordsAnalyzed: successful.length,\n  failedKeywords: failed.length,\n  failedList: failed,\n  rankingDistribution: rankingDistribution,\n  aggregateMetrics: {\n    avgDifficulty: parseFloat(avgDifficulty.toFixed(2)),\n    avgOpportunity: parseFloat(avgOpportunity.toFixed(2)),\n    priorityDistribution: priorityDist\n  },\n  topOpportunities: topOpportunities,\n  competitorStrengths: competitorStrengths,\n  competitorWeaknesses: competitorWeaknesses,\n  quickWins: quickWins,\n  longTermTargets: longTermTargets,\n  allRelatedKeywords: allRelatedKeywords.slice(0, 100),\n  topSerpTitles: topSerpTitles.slice(0, 50),\n  individualResults: successful,\n  timestamp: config.timestamp\n};"
+      },
+      "id": "aggregate-competitor-results",
+      "name": "Aggregate Results",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2440, 500]
+    },
+    {
+      "parameters": {
+        "resource": "text",
+        "operation": "message",
+        "modelId": "gpt-4o-mini",
+        "messages": {
+          "values": [
+            {
+              "role": "system",
+              "content": "You are an expert competitive SEO strategist. Analyze competitor keyword data and provide strategic insights for competitive advantage. Return ONLY valid JSON with no markdown."
+            },
+            {
+              "role": "user",
+              "content": "=Perform competitive gap analysis for domain: {{ $json.domain }}\n\n**Competitor Overview:**\n- Total ranked keywords analyzed: {{ $json.totalKeywordsAnalyzed }}\n- Top 3 rankings: {{ $json.rankingDistribution.top3 }}\n- Top 10 rankings: {{ $json.rankingDistribution.top10 }}\n- Page 2+ rankings: {{ $json.rankingDistribution.page2 }}\n- Not ranking: {{ $json.rankingDistribution.notRanking }}\n\n**Quick Win Keywords:**\n{{ $json.quickWins.slice(0, 10).join(', ') }}\n\n**Competitor Strengths (Top Rankings):**\n{{ $json.competitorStrengths.slice(0, 5).map(s => `${s.keyword} (Pos ${s.position})`).join(', ') }}\n\n**Competitor Weaknesses (Weak Rankings):**\n{{ $json.competitorWeaknesses.slice(0, 5).map(w => `${w.keyword} (Pos ${w.position})`).join(', ') }}\n\n**Top SERP Patterns:**\n{{ $json.topSerpTitles.slice(0, 15).join('\\n') }}\n\n**Average Metrics:**\n- Difficulty: {{ $json.aggregateMetrics.avgDifficulty }}\n- Opportunity: {{ $json.aggregateMetrics.avgOpportunity }}\n\nProvide strategic analysis in this EXACT JSON structure:\n{\n  \"competitive_positioning\": {\n    \"competitor_strength_level\": \"dominant|strong|moderate|weak\",\n    \"overall_vulnerability\": \"high|medium|low\",\n    \"key_advantages\": [\"advantage 1\", \"advantage 2\"],\n    \"key_weaknesses\": [\"weakness 1\", \"weakness 2\"]\n  },\n  \"content_pillars\": [\n    {\n      \"pillar_name\": \"topic pillar name\",\n      \"priority_keywords\": [\"kw1\", \"kw2\"],\n      \"competitor_position\": \"strong|moderate|weak|absent\",\n      \"attack_strategy\": \"specific strategy to compete\",\n      \"estimated_effort\": \"low|medium|high\"\n    }\n  ],\n  \"gap_opportunities\": [\n    {\n      \"gap_type\": \"content topic or format\",\n      \"keywords\": [\"kw1\", \"kw2\"],\n      \"why_opportunity\": \"explanation\",\n      \"recommended_action\": \"specific next step\"\n    }\n  ],\n  \"competitive_threats\": [\n    {\n      \"threat\": \"description of competitive threat\",\n      \"keywords_at_risk\": [\"kw1\", \"kw2\"],\n      \"mitigation_strategy\": \"how to defend\"\n    }\n  ],\n  \"strategic_recommendations\": {\n    \"immediate_actions\": [\"action 1\", \"action 2\"],\n    \"30_day_goals\": [\"goal 1\", \"goal 2\"],\n    \"90_day_goals\": [\"goal 1\", \"goal 2\"]\n  }\n}"
+            }
+          ]
+        },
+        "options": {
+          "temperature": 0.4,
+          "maxTokens": 2000
+        }
+      },
+      "id": "competitive-gap-analysis",
+      "name": "Competitive Gap Analysis",
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 1.4,
+      "position": [2660, 500]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Build final competitor analysis report\ntry {\n  const aggregateData = $('Aggregate Results').item.json;\n  const aiResponse = $input.item.json;\n  \n  // Parse AI response\n  let strategy;\n  try {\n    const content = aiResponse.message?.content || aiResponse.text || JSON.stringify(aiResponse);\n    const cleanContent = content.replace(/```(?:json)?\\s*([\\s\\S]*?)```/g, '$1').trim();\n    strategy = JSON.parse(cleanContent);\n  } catch (parseError) {\n    // Fallback strategy\n    strategy = {\n      competitive_positioning: {\n        competitor_strength_level: 'moderate',\n        overall_vulnerability: 'medium',\n        key_advantages: ['Unable to parse AI response'],\n        key_weaknesses: ['Analysis incomplete']\n      },\n      content_pillars: [],\n      gap_opportunities: [],\n      competitive_threats: [],\n      strategic_recommendations: {\n        immediate_actions: ['Review competitor analysis manually'],\n        30_day_goals: [],\n        90_day_goals: []\n      }\n    };\n  }\n  \n  // Build comprehensive report\n  const competitorReport = {\n    domain: aggregateData.domain,\n    analysis_summary: {\n      total_keywords_extracted: aggregateData.totalKeywordsExtracted,\n      total_keywords_analyzed: aggregateData.totalKeywordsAnalyzed,\n      failed_analyses: aggregateData.failedKeywords,\n      analysis_timestamp: aggregateData.timestamp\n    },\n    ranking_overview: {\n      distribution: aggregateData.rankingDistribution,\n      percentage_top10: parseFloat((\n        (aggregateData.rankingDistribution.top3 + aggregateData.rankingDistribution.top10) /\n        Math.max(aggregateData.totalKeywordsAnalyzed, 1) * 100\n      ).toFixed(2))\n    },\n    aggregate_scores: aggregateData.aggregateMetrics,\n    competitive_positioning: strategy.competitive_positioning || {},\n    top_opportunities: aggregateData.topOpportunities,\n    quick_wins: aggregateData.quickWins,\n    long_term_targets: aggregateData.longTermTargets,\n    competitor_strengths: aggregateData.competitorStrengths,\n    competitor_weaknesses: aggregateData.competitorWeaknesses,\n    content_pillars: strategy.content_pillars || [],\n    gap_opportunities: strategy.gap_opportunities || [],\n    competitive_threats: strategy.competitive_threats || [],\n    strategic_recommendations: strategy.strategic_recommendations || {},\n    individual_keyword_results: aggregateData.individualResults.map(r => ({\n      keyword: r.keyword,\n      competitor_position: r.actualPosition,\n      competitive_insight: r.competitiveInsight,\n      difficulty_score: r.difficultyScore,\n      opportunity_score: r.opportunityScore,\n      priority: r.priority,\n      combined_score: r.combinedScore,\n      serp_features_summary: {\n        total_results: (r.serpOverview || []).length,\n        high_authority_count: r.authorityMetrics?.highAuthorityCount || 0,\n        unique_domains: r.authorityMetrics?.uniqueDomains || 0\n      },\n      content_gaps_summary: {\n        missing_topics: (r.contentGaps?.missingSubtopics || []).length,\n        thin_areas: (r.contentGaps?.thinContentAreas || []).length\n      }\n    })),\n    failed_keywords: aggregateData.failedList,\n    metadata: {\n      workflow_version: '2.1-competitor',\n      estimated_cost_usd: parseFloat((aggregateData.totalKeywordsAnalyzed * 0.008).toFixed(2)),\n      processing_time_estimate: `${Math.ceil(aggregateData.totalKeywordsAnalyzed / 45)} minutes`\n    }\n  };\n  \n  return competitorReport;\n  \n} catch (error) {\n  throw new Error(`Competitor report building failed: ${error.message}`);\n}"
+      },
+      "id": "build-competitor-report",
+      "name": "Build Competitor Report",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2880, 500]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify($json, null, 2) }}",
+        "options": {
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "name": "X-Workflow-Version",
+                "value": "2.1-competitor"
+              },
+              {
+                "name": "X-Competitor-Domain",
+                "value": "={{ $json.domain }}"
+              },
+              {
+                "name": "X-Keywords-Analyzed",
+                "value": "={{ $json.analysis_summary.total_keywords_analyzed }}"
+              }
+            ]
+          }
+        }
+      },
+      "id": "respond-competitor",
+      "name": "Respond",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [3100, 500]
+    }
+  ],
+  "connections": {
+    "Webhook Trigger": {
+      "main": [
+        [
+          {
+            "node": "Validate Input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Input": {
+      "main": [
+        [
+          {
+            "node": "Extract Competitor Keywords",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Competitor Keywords": {
+      "main": [
+        [
+          {
+            "node": "Process & Filter Keywords",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Process & Filter Keywords": {
+      "main": [
+        [
+          {
+            "node": "Split Keywords",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Split Keywords": {
+      "main": [
+        [
+          {
+            "node": "Batch Processor",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Batch Processor": {
+      "main": [
+        [
+          {
+            "node": "Fetch SERP",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Aggregate Results",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch SERP": {
+      "main": [
+        [
+          {
+            "node": "Process & Analyze",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Process & Analyze": {
+      "main": [
+        [
+          {
+            "node": "Score Keywords",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Score Keywords": {
+      "main": [
+        [
+          {
+            "node": "Batch Delay",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Batch Delay": {
+      "main": [
+        [
+          {
+            "node": "Batch Processor",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Aggregate Results": {
+      "main": [
+        [
+          {
+            "node": "Competitive Gap Analysis",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Competitive Gap Analysis": {
+      "main": [
+        [
+          {
+            "node": "Build Competitor Report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Competitor Report": {
+      "main": [
+        [
+          {
+            "node": "Respond",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1",
+    "saveExecutionProgress": false,
+    "saveManualExecutions": false,
+    "executionTimeout": 900
+  },
+  "staticData": null,
+  "tags": ["seo", "competitor-analysis", "keyword-research"],
+  "triggerCount": 1,
+  "updatedAt": "2025-11-17T00:00:00.000Z",
+  "versionId": "2.1"
+}
