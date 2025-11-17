@@ -17,7 +17,7 @@
     },
     {
       "parameters": {
-        "jsCode": "// Validate and clean input\nconst body = $input.item.json.body || $input.item.json;\n\nif (!body.keyword || body.keyword.trim() === '') {\n  throw new Error('keyword is required');\n}\n\nconst keyword = body.keyword.trim();\nconst depth = body.depth && !isNaN(parseInt(body.depth)) ? parseInt(body.depth) : 20;\n\n// Ensure depth is within reasonable bounds\nconst validDepth = Math.max(1, Math.min(depth, 100));\n\nreturn {\n  keyword: keyword,\n  depth: validDepth,\n  timestamp: new Date().toISOString()\n};"
+        "jsCode": "// Enhanced input validation with error handling\ntry {\n  const body = $input.item.json.body || $input.item.json;\n  \n  // Validate keyword\n  if (!body.keyword || typeof body.keyword !== 'string' || body.keyword.trim() === '') {\n    throw new Error('Invalid input: keyword is required and must be a non-empty string');\n  }\n  \n  const keyword = body.keyword.trim();\n  \n  // Validate keyword length\n  if (keyword.length > 200) {\n    throw new Error('Invalid input: keyword must be 200 characters or less');\n  }\n  \n  // Parse and validate depth\n  let depth = 20; // default\n  if (body.depth !== undefined) {\n    const parsedDepth = parseInt(body.depth);\n    if (isNaN(parsedDepth) || parsedDepth < 1) {\n      throw new Error('Invalid input: depth must be a positive number');\n    }\n    depth = Math.min(parsedDepth, 100); // cap at 100\n  }\n  \n  return {\n    keyword: keyword,\n    depth: depth,\n    timestamp: new Date().toISOString(),\n    location: body.location || 'us',\n    language: body.language || 'en'\n  };\n  \n} catch (error) {\n  throw new Error(`Validation failed: ${error.message}`);\n}"
       },
       "id": "validate-input-node",
       "name": "Validate Input",
@@ -48,194 +48,75 @@
             },
             {
               "name": "gl",
-              "value": "us"
+              "value": "={{ $json.location }}"
             },
             {
               "name": "hl",
-              "value": "en"
+              "value": "={{ $json.language }}"
             }
           ]
         },
-        "options": {}
+        "options": {
+          "timeout": 30000,
+          "retry": {
+            "maxRetries": 2,
+            "retryOnStatus": [429, 500, 502, 503, 504]
+          }
+        }
       },
       "id": "fetch-serp-node",
       "name": "Fetch SERP",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [680, 220]
+      "position": [680, 300]
     },
     {
       "parameters": {
-        "method": "GET",
-        "url": "https://serpapi.com/search",
-        "authentication": "predefinedCredentialType",
-        "nodeCredentialType": "serpApiApi",
-        "sendQuery": true,
-        "queryParameters": {
-          "parameters": [
+        "jsCode": "// Comprehensive data processing and gap analysis\ntry {\n  const serpData = $input.item.json;\n  const validatedInput = $('Validate Input').item.json;\n  \n  const organicResults = serpData.organic_results || [];\n  const relatedSearches = serpData.related_searches || [];\n  const relatedQuestions = serpData.related_questions || [];\n  const answerBox = serpData.answer_box || null;\n  const knowledgeGraph = serpData.knowledge_graph || null;\n  \n  // Process SERP overview with URL safety\n  const serpOverview = organicResults.map((result, index) => {\n    let domain = '';\n    try {\n      if (result.link) {\n        domain = new URL(result.link).hostname.replace('www.', '');\n      }\n    } catch (e) {\n      domain = result.displayed_link || 'unknown';\n    }\n    \n    return {\n      rank: index + 1,\n      title: result.title || '',\n      snippet: result.snippet || '',\n      link: result.link || '',\n      domain: domain\n    };\n  });\n  \n  // Extract related keywords\n  const relatedKeywords = [];\n  \n  relatedSearches.forEach(item => {\n    if (item.query) {\n      relatedKeywords.push({\n        keyword: item.query,\n        source: 'related_search'\n      });\n    }\n  });\n  \n  relatedQuestions.forEach(item => {\n    if (item.question) {\n      relatedKeywords.push({\n        keyword: item.question,\n        source: 'people_also_ask',\n        snippet: item.snippet || null\n      });\n    }\n  });\n  \n  // Calculate authority metrics\n  const domainCounts = {};\n  serpOverview.forEach(item => {\n    domainCounts[item.domain] = (domainCounts[item.domain] || 0) + 1;\n  });\n  \n  const highAuthorityDomains = [\n    'wikipedia.org', 'youtube.com', 'amazon.com', 'facebook.com',\n    'linkedin.com', 'twitter.com', 'instagram.com', 'reddit.com',\n    'quora.com', 'pinterest.com', 'medium.com', 'forbes.com',\n    'nytimes.com', 'washingtonpost.com', 'bbc.com', 'cnn.com'\n  ];\n  \n  const authorityCount = serpOverview.filter(item => \n    highAuthorityDomains.some(domain => item.domain.includes(domain))\n  ).length;\n  \n  const authorityMetrics = {\n    highAuthorityCount: authorityCount,\n    uniqueDomains: Object.keys(domainCounts).length,\n    totalResults: serpOverview.length,\n    domainConcentration: Math.max(...Object.values(domainCounts)) / serpOverview.length\n  };\n  \n  // Content theme analysis\n  const contentThemes = {};\n  const patterns = [\n    { name: 'how-to', keywords: ['how to', 'guide', 'tutorial', 'step', 'learn', 'instructions'] },\n    { name: 'comparison', keywords: ['vs', 'versus', 'compare', 'best', 'top', 'review'] },\n    { name: 'pricing', keywords: ['price', 'cost', 'pricing', 'cheap', 'expensive', 'affordable', 'free'] },\n    { name: 'definition', keywords: ['what is', 'definition', 'meaning', 'explain', 'overview'] },\n    { name: 'list', keywords: ['list', 'types', 'kinds', 'examples', 'ways'] },\n    { name: 'location', keywords: ['near me', 'location', 'where', 'local', 'nearby'] },\n    { name: 'reviews', keywords: ['review', 'rating', 'testimonial', 'customer', 'feedback'] },\n    { name: 'benefits', keywords: ['benefit', 'advantage', 'why', 'reason', 'pros'] }\n  ];\n  \n  serpOverview.forEach(item => {\n    const content = `${item.title} ${item.snippet}`.toLowerCase();\n    patterns.forEach(pattern => {\n      if (pattern.keywords.some(kw => content.includes(kw))) {\n        contentThemes[pattern.name] = (contentThemes[pattern.name] || 0) + 1;\n      }\n    });\n  });\n  \n  // Identify content gaps\n  const totalResults = serpOverview.length;\n  const missingSubtopics = [];\n  const thinContentAreas = [];\n  \n  patterns.forEach(pattern => {\n    const count = contentThemes[pattern.name] || 0;\n    const coverage = totalResults > 0 ? (count / totalResults) * 100 : 0;\n    \n    if (coverage === 0) {\n      missingSubtopics.push({\n        theme: pattern.name,\n        coverage: 0,\n        opportunity: 'high'\n      });\n    } else if (coverage < 20) {\n      thinContentAreas.push({\n        theme: pattern.name,\n        coverage: parseFloat(coverage.toFixed(1)),\n        opportunity: 'medium'\n      });\n    }\n  });\n  \n  // Repeated competitor angles\n  const repeatedAngles = Object.entries(contentThemes)\n    .filter(([_, count]) => count >= totalResults * 0.5)\n    .map(([theme, count]) => ({\n      theme: theme,\n      frequency: count,\n      saturation: 'high'\n    }));\n  \n  // Generate content opportunities\n  const contentOpportunities = [];\n  \n  missingSubtopics.forEach(gap => {\n    contentOpportunities.push(`Create ${gap.theme} content - untapped opportunity`);\n  });\n  \n  thinContentAreas.forEach(thin => {\n    contentOpportunities.push(`Expand ${thin.theme} content - low competition (${thin.coverage}% coverage)`);\n  });\n  \n  const paaCount = relatedKeywords.filter(kw => kw.source === 'people_also_ask').length;\n  if (paaCount > 0) {\n    contentOpportunities.push(`Answer ${paaCount} People Also Ask questions`);\n  }\n  \n  // SERP features analysis\n  const serpFeatures = {\n    hasAnswerBox: !!answerBox,\n    hasKnowledgeGraph: !!knowledgeGraph,\n    hasPAA: paaCount > 0,\n    relatedSearchCount: relatedSearches.length\n  };\n  \n  return {\n    keyword: validatedInput.keyword,\n    depth: validatedInput.depth,\n    timestamp: validatedInput.timestamp,\n    serpOverview: serpOverview,\n    relatedKeywords: relatedKeywords,\n    authorityMetrics: authorityMetrics,\n    contentGaps: {\n      missingSubtopics: missingSubtopics,\n      thinContentAreas: thinContentAreas,\n      repeatedCompetitorAngles: repeatedAngles,\n      contentOpportunities: contentOpportunities,\n      contentThemes: contentThemes\n    },\n    serpFeatures: serpFeatures\n  };\n  \n} catch (error) {\n  throw new Error(`Data processing failed: ${error.message}`);\n}"
+      },
+      "id": "process-analyze-node",
+      "name": "Process & Analyze",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [900, 300]
+    },
+    {
+      "parameters": {
+        "resource": "text",
+        "operation": "message",
+        "modelId": "gpt-4o-mini",
+        "messages": {
+          "values": [
             {
-              "name": "q",
-              "value": "={{ $('Validate Input').item.json.keyword }}"
+              "role": "system",
+              "content": "You are an expert SEO analyst. Analyze keyword data and provide: 1) Search intent classification, 2) Semantic keyword clustering. Return ONLY valid JSON with no markdown formatting."
             },
             {
-              "name": "engine",
-              "value": "google"
-            },
-            {
-              "name": "gl",
-              "value": "us"
-            },
-            {
-              "name": "hl",
-              "value": "en"
-            },
-            {
-              "name": "num",
-              "value": "10"
+              "role": "user",
+              "content": "=Analyze this keyword:\n\nKeyword: {{ $json.keyword }}\n\nTop 5 SERP Titles:\n{{ $json.serpOverview.slice(0, 5).map(s => s.title).join('\\n') }}\n\nRelated Keywords ({{ $json.relatedKeywords.length }} total):\n{{ $json.relatedKeywords.slice(0, 15).map(k => k.keyword).join(', ') }}\n\nContent Gaps:\n- Missing: {{ $json.contentGaps.missingSubtopics.map(g => g.theme).join(', ') || 'none' }}\n- Thin: {{ $json.contentGaps.thinContentAreas.map(g => g.theme).join(', ') || 'none' }}\n\nProvide analysis in this EXACT JSON structure (no code blocks):\n{\n  \"intent\": {\n    \"primary\": \"Informational|Commercial|Transactional|Navigational|Mixed\",\n    \"confidence\": {\n      \"informational\": 0-100,\n      \"commercial\": 0-100,\n      \"transactional\": 0-100,\n      \"navigational\": 0-100\n    },\n    \"reasoning\": \"1-2 sentence explanation\"\n  },\n  \"clusters\": [\n    {\n      \"topic\": \"cluster name\",\n      \"keywords\": [\"kw1\", \"kw2\"],\n      \"primary\": \"best primary keyword\",\n      \"secondary\": [\"supporting kw1\", \"supporting kw2\"],\n      \"page_type\": \"guide|blog|service|landing|comparison|list\",\n      \"angle\": \"content approach\"\n    }\n  ]\n}"
             }
           ]
         },
-        "options": {}
+        "options": {
+          "temperature": 0.3,
+          "maxTokens": 1500
+        }
       },
-      "id": "fetch-related-keywords-node",
-      "name": "Fetch Related Keywords",
-      "type": "n8n-nodes-base.httpRequest",
-      "typeVersion": 4.2,
-      "position": [680, 380]
-    },
-    {
-      "parameters": {
-        "jsCode": "// Extract and structure SERP data\nconst serpData = $input.item.json;\nconst organicResults = serpData.organic_results || [];\nconst relatedSearches = serpData.related_searches || [];\n\n// Extract SERP overview\nconst serpOverview = organicResults.map((result, index) => {\n  const url = result.link || '';\n  const domain = url ? new URL(url).hostname.replace('www.', '') : '';\n  \n  return {\n    rank: index + 1,\n    title: result.title || '',\n    snippet: result.snippet || '',\n    link: url,\n    domain: domain,\n    displayed_link: result.displayed_link || domain\n  };\n});\n\n// Calculate domain authority distribution (simple heuristic)\nconst domainCounts = {};\nserpOverview.forEach(item => {\n  domainCounts[item.domain] = (domainCounts[item.domain] || 0) + 1;\n});\n\nconst highAuthorityDomains = ['wikipedia.org', 'youtube.com', 'amazon.com', 'facebook.com', \n  'linkedin.com', 'twitter.com', 'instagram.com', 'pinterest.com', 'reddit.com'];\n\nconst authorityCount = serpOverview.filter(item => \n  highAuthorityDomains.some(domain => item.domain.includes(domain))\n).length;\n\nreturn {\n  serpOverview: serpOverview,\n  relatedSearches: relatedSearches.map(rs => rs.query || ''),\n  authorityMetrics: {\n    highAuthorityCount: authorityCount,\n    uniqueDomains: Object.keys(domainCounts).length,\n    totalResults: serpOverview.length\n  }\n};"
-      },
-      "id": "process-serp-node",
-      "name": "Process SERP Data",
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
-      "position": [900, 220]
-    },
-    {
-      "parameters": {
-        "jsCode": "// Process related keywords data\nconst relatedData = $input.item.json;\nconst serpOverview = $('Process SERP Data').item.json.serpOverview;\nconst relatedSearches = relatedData.related_searches || [];\nconst relatedQuestions = relatedData.related_questions || [];\n\n// Extract related keywords with available metrics\nconst relatedKeywords = [];\n\n// Add related searches\nrelatedSearches.forEach(item => {\n  if (item.query) {\n    relatedKeywords.push({\n      keyword: item.query,\n      source: 'related_search',\n      volume: null,\n      cpc: null,\n      difficulty: null\n    });\n  }\n});\n\n// Add related questions (People Also Ask)\nrelatedQuestions.forEach(item => {\n  if (item.question) {\n    relatedKeywords.push({\n      keyword: item.question,\n      source: 'people_also_ask',\n      volume: null,\n      cpc: null,\n      difficulty: null,\n      snippet: item.snippet || null\n    });\n  }\n});\n\nreturn {\n  relatedKeywords: relatedKeywords,\n  serpOverview: serpOverview\n};"
-      },
-      "id": "process-related-keywords-node",
-      "name": "Process Related Keywords",
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
-      "position": [900, 380]
-    },
-    {
-      "parameters": {
-        "jsCode": "// Merge SERP and Related Keywords data\nconst serpData = $('Process SERP Data').item.json;\nconst relatedData = $('Process Related Keywords').item.json;\nconst validatedInput = $('Validate Input').item.json;\n\nreturn {\n  keyword: validatedInput.keyword,\n  depth: validatedInput.depth,\n  timestamp: validatedInput.timestamp,\n  serpOverview: serpData.serpOverview,\n  relatedSearches: serpData.relatedSearches,\n  authorityMetrics: serpData.authorityMetrics,\n  relatedKeywords: relatedData.relatedKeywords\n};"
-      },
-      "id": "merge-data-node",
-      "name": "Merge Data",
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
+      "id": "ai-analysis-node",
+      "name": "AI Analysis",
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 1.4,
       "position": [1120, 300]
     },
     {
       "parameters": {
-        "jsCode": "// Content Gap Analysis\nconst data = $input.item.json;\nconst serpOverview = data.serpOverview || [];\nconst relatedKeywords = data.relatedKeywords || [];\n\n// Extract all titles and snippets\nconst allContent = serpOverview.map(item => `${item.title} ${item.snippet}`).join(' ').toLowerCase();\n\n// Common topic words to analyze\nconst topicKeywords = data.keyword.toLowerCase().split(' ');\n\n// Analyze content themes\nconst contentThemes = {};\nserpOverview.forEach(item => {\n  const content = `${item.title} ${item.snippet}`.toLowerCase();\n  \n  // Look for common patterns\n  const patterns = [\n    { name: 'how-to', keywords: ['how to', 'guide', 'tutorial', 'step', 'learn'] },\n    { name: 'comparison', keywords: ['vs', 'versus', 'compare', 'best', 'top', 'review'] },\n    { name: 'pricing', keywords: ['price', 'cost', 'pricing', 'cheap', 'expensive', 'affordable'] },\n    { name: 'definition', keywords: ['what is', 'definition', 'meaning', 'explain'] },\n    { name: 'list', keywords: ['list', 'types', 'kinds', 'examples'] },\n    { name: 'location', keywords: ['near me', 'location', 'where', 'local'] },\n    { name: 'reviews', keywords: ['review', 'rating', 'testimonial', 'customer'] },\n    { name: 'benefits', keywords: ['benefit', 'advantage', 'why', 'reason'] }\n  ];\n  \n  patterns.forEach(pattern => {\n    if (pattern.keywords.some(kw => content.includes(kw))) {\n      contentThemes[pattern.name] = (contentThemes[pattern.name] || 0) + 1;\n    }\n  });\n});\n\n// Identify gaps (themes with low coverage)\nconst totalResults = serpOverview.length;\nconst missingSubtopics = [];\nconst thinContentAreas = [];\n\nconst allThemes = ['how-to', 'comparison', 'pricing', 'definition', 'list', 'location', 'reviews', 'benefits'];\nallThemes.forEach(theme => {\n  const count = contentThemes[theme] || 0;\n  const coverage = totalResults > 0 ? (count / totalResults) * 100 : 0;\n  \n  if (coverage === 0) {\n    missingSubtopics.push({\n      theme: theme,\n      coverage: 0,\n      opportunity: 'high'\n    });\n  } else if (coverage < 20) {\n    thinContentAreas.push({\n      theme: theme,\n      coverage: coverage.toFixed(1),\n      opportunity: 'medium'\n    });\n  }\n});\n\n// Identify repeated competitor angles\nconst repeatedAngles = Object.entries(contentThemes)\n  .filter(([_, count]) => count >= totalResults * 0.5)\n  .map(([theme, count]) => ({\n    theme: theme,\n    frequency: count,\n    saturation: 'high'\n  }));\n\n// Generate content opportunities\nconst contentOpportunities = [];\n\nif (missingSubtopics.length > 0) {\n  missingSubtopics.forEach(gap => {\n    contentOpportunities.push(`Create ${gap.theme} content - no competitors covering this angle`);\n  });\n}\n\nif (thinContentAreas.length > 0) {\n  thinContentAreas.forEach(thin => {\n    contentOpportunities.push(`Expand on ${thin.theme} content - low competition (${thin.coverage}% coverage)`);\n  });\n}\n\n// Add opportunities from related keywords\nconst uniqueQuestions = relatedKeywords.filter(kw => kw.source === 'people_also_ask');\nif (uniqueQuestions.length > 0) {\n  contentOpportunities.push(`Answer ${uniqueQuestions.length} related questions from People Also Ask`);\n}\n\nreturn {\n  ...data,\n  contentGaps: {\n    missingSubtopics: missingSubtopics,\n    thinContentAreas: thinContentAreas,\n    repeatedCompetitorAngles: repeatedAngles,\n    contentOpportunities: contentOpportunities,\n    contentThemes: contentThemes\n  }\n};"
+        "jsCode": "// Parse AI response, calculate scores, and build final report\ntry {\n  const data = $('Process & Analyze').item.json;\n  const aiResponse = $input.item.json;\n  \n  // Parse AI response with robust error handling\n  let aiData;\n  try {\n    const content = aiResponse.message?.content || aiResponse.text || JSON.stringify(aiResponse);\n    \n    // Remove markdown code blocks if present\n    const cleanContent = content.replace(/```(?:json)?\\s*([\\s\\S]*?)```/g, '$1').trim();\n    \n    aiData = JSON.parse(cleanContent);\n  } catch (parseError) {\n    // Fallback AI data if parsing fails\n    aiData = {\n      intent: {\n        primary: 'Mixed',\n        confidence: {\n          informational: 50,\n          commercial: 30,\n          transactional: 15,\n          navigational: 5\n        },\n        reasoning: 'AI parsing failed, using default classification'\n      },\n      clusters: [\n        {\n          topic: 'Primary Topic',\n          keywords: [data.keyword, ...data.relatedKeywords.slice(0, 3).map(k => k.keyword)],\n          primary: data.keyword,\n          secondary: data.relatedKeywords.slice(0, 3).map(k => k.keyword),\n          page_type: 'guide',\n          angle: 'Comprehensive guide approach'\n        }\n      ]\n    };\n  }\n  \n  const serpOverview = data.serpOverview || [];\n  const authorityMetrics = data.authorityMetrics || {};\n  const contentGaps = data.contentGaps || {};\n  const intentData = aiData.intent || {};\n  const clusters = aiData.clusters || [];\n  \n  // === DIFFICULTY SCORE (0-100, higher = harder) ===\n  let difficultyScore = 0;\n  \n  // 1. Domain Authority (0-35 points)\n  const highAuthorityRatio = authorityMetrics.highAuthorityCount / Math.max(authorityMetrics.totalResults, 1);\n  difficultyScore += highAuthorityRatio * 35;\n  \n  // 2. Domain Concentration (0-25 points)\n  const concentration = authorityMetrics.domainConcentration || 0;\n  if (concentration > 0.3) {\n    difficultyScore += 25; // High concentration = harder\n  } else if (concentration > 0.15) {\n    difficultyScore += 15;\n  } else {\n    difficultyScore += 5;\n  }\n  \n  // 3. Content Saturation (0-20 points)\n  const saturatedThemes = (contentGaps.repeatedCompetitorAngles || []).length;\n  difficultyScore += Math.min(saturatedThemes * 5, 20);\n  \n  // 4. Intent Competition (0-20 points)\n  const intentScores = intentData.confidence || {};\n  if (intentScores.transactional > 60) {\n    difficultyScore += 20;\n  } else if (intentScores.commercial > 60) {\n    difficultyScore += 15;\n  } else if (intentScores.informational > 60) {\n    difficultyScore += 8;\n  } else {\n    difficultyScore += 12;\n  }\n  \n  difficultyScore = Math.min(Math.round(difficultyScore), 100);\n  \n  // === OPPORTUNITY SCORE (0-100, higher = better) ===\n  let opportunityScore = 0;\n  \n  // 1. Content Gaps (0-35 points)\n  const missingCount = (contentGaps.missingSubtopics || []).length;\n  const thinCount = (contentGaps.thinContentAreas || []).length;\n  opportunityScore += Math.min(missingCount * 8 + thinCount * 4, 35);\n  \n  // 2. Keyword Variety (0-25 points)\n  const keywordCount = (data.relatedKeywords || []).length;\n  opportunityScore += Math.min(keywordCount * 1.5, 25);\n  \n  // 3. Intent Alignment (0-25 points)\n  if (intentData.primary === 'Informational' || intentData.primary === 'Commercial') {\n    opportunityScore += 25;\n  } else if (intentData.primary === 'Mixed') {\n    opportunityScore += 18;\n  } else {\n    opportunityScore += 10;\n  }\n  \n  // 4. Low Competition Bonus (0-15 points)\n  if (difficultyScore < 35) {\n    opportunityScore += 15;\n  } else if (difficultyScore < 55) {\n    opportunityScore += 10;\n  } else if (difficultyScore < 70) {\n    opportunityScore += 5;\n  }\n  \n  opportunityScore = Math.min(Math.round(opportunityScore), 100);\n  \n  // === PRIORITY CLASSIFICATION ===\n  let priority = 'Low';\n  const combinedScore = opportunityScore - (difficultyScore * 0.65);\n  \n  if (combinedScore > 35 && opportunityScore > 65) {\n    priority = 'High';\n  } else if (combinedScore > 15 && opportunityScore > 45) {\n    priority = 'Medium';\n  }\n  \n  // === BUILD FINAL REPORT ===\n  const scoReport = {\n    keyword: data.keyword,\n    search_intent: {\n      primary: intentData.primary || 'Mixed',\n      confidence_scores: intentData.confidence || {},\n      reasoning: intentData.reasoning || ''\n    },\n    difficulty_score: difficultyScore,\n    opportunity_score: opportunityScore,\n    priority: priority,\n    score_breakdown: {\n      difficulty_factors: {\n        domain_authority: Math.round(highAuthorityRatio * 35),\n        domain_concentration: concentration > 0.3 ? 25 : (concentration > 0.15 ? 15 : 5),\n        content_saturation: Math.min(saturatedThemes * 5, 20),\n        intent_competition: intentScores.transactional > 60 ? 20 : (intentScores.commercial > 60 ? 15 : (intentScores.informational > 60 ? 8 : 12))\n      },\n      opportunity_factors: {\n        content_gaps: Math.min(missingCount * 8 + thinCount * 4, 35),\n        keyword_variety: Math.min(keywordCount * 1.5, 25),\n        intent_alignment: intentData.primary === 'Informational' || intentData.primary === 'Commercial' ? 25 : (intentData.primary === 'Mixed' ? 18 : 10),\n        low_competition_bonus: difficultyScore < 35 ? 15 : (difficultyScore < 55 ? 10 : (difficultyScore < 70 ? 5 : 0))\n      },\n      combined_score: parseFloat(combinedScore.toFixed(2))\n    },\n    serp_overview: serpOverview,\n    content_gaps: {\n      missing_subtopics: contentGaps.missingSubtopics || [],\n      thin_content_areas: contentGaps.thinContentAreas || [],\n      repeated_competitor_angles: contentGaps.repeatedCompetitorAngles || [],\n      content_opportunities: contentGaps.contentOpportunities || [],\n      content_themes: contentGaps.contentThemes || {}\n    },\n    keyword_clusters: clusters,\n    related_keywords: data.relatedKeywords || [],\n    serp_features: data.serpFeatures || {},\n    metadata: {\n      search_depth: data.depth,\n      total_serp_results: serpOverview.length,\n      total_related_keywords: data.relatedKeywords.length,\n      total_clusters: clusters.length,\n      authority_metrics: authorityMetrics,\n      timestamp: data.timestamp,\n      workflow_version: '2.0-optimized'\n    }\n  };\n  \n  return scoReport;\n  \n} catch (error) {\n  throw new Error(`Report building failed: ${error.message}`);\n}"
       },
-      "id": "gap-analysis-node",
-      "name": "Gap Analysis",
+      "id": "score-build-node",
+      "name": "Score & Build Report",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [1340, 300]
-    },
-    {
-      "parameters": {
-        "resource": "text",
-        "operation": "message",
-        "modelId": "gpt-4o-mini",
-        "messages": {
-          "values": [
-            {
-              "role": "system",
-              "content": "You are an expert SEO analyst specializing in search intent classification. Analyze the given keyword and SERP results to determine the primary search intent. Classify as: Informational, Commercial, Transactional, Navigational, or Mixed. Provide confidence scores for each intent type (0-100). Return ONLY valid JSON."
-            },
-            {
-              "role": "user",
-              "content": "=Analyze this keyword and classify its search intent:\n\nKeyword: {{ $json.keyword }}\n\nTop SERP Results:\n{{ JSON.stringify($json.serpOverview.slice(0, 5), null, 2) }}\n\nRelated Searches:\n{{ JSON.stringify($json.relatedSearches.slice(0, 5), null, 2) }}\n\nRespond with this exact JSON structure:\n{\n  \"primary_intent\": \"one of: Informational, Commercial, Transactional, Navigational, Mixed\",\n  \"intent_confidence\": {\n    \"informational\": 0-100,\n    \"commercial\": 0-100,\n    \"transactional\": 0-100,\n    \"navigational\": 0-100\n  },\n  \"reasoning\": \"brief explanation\"\n}"
-            }
-          ]
-        },
-        "options": {
-          "temperature": 0.3
-        }
-      },
-      "id": "classify-intent-node",
-      "name": "Classify Intent",
-      "type": "@n8n/n8n-nodes-langchain.openAi",
-      "typeVersion": 1.4,
-      "position": [1560, 300]
-    },
-    {
-      "parameters": {
-        "jsCode": "// Parse AI response and merge with data\nconst data = $('Gap Analysis').item.json;\nconst aiResponse = $input.item.json;\n\n// Extract the AI message content\nlet intentData;\ntry {\n  const content = aiResponse.message?.content || aiResponse.text || JSON.stringify(aiResponse);\n  \n  // Try to extract JSON from markdown code blocks if present\n  const jsonMatch = content.match(/```(?:json)?\\s*([\\s\\S]*?)```/) || [null, content];\n  const jsonStr = jsonMatch[1].trim();\n  \n  intentData = JSON.parse(jsonStr);\n} catch (e) {\n  // Fallback intent data\n  intentData = {\n    primary_intent: 'Mixed',\n    intent_confidence: {\n      informational: 50,\n      commercial: 30,\n      transactional: 15,\n      navigational: 5\n    },\n    reasoning: 'Unable to parse AI response, using default classification'\n  };\n}\n\nreturn {\n  ...data,\n  searchIntent: intentData\n};"
-      },
-      "id": "parse-intent-node",
-      "name": "Parse Intent Response",
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
-      "position": [1780, 300]
-    },
-    {
-      "parameters": {
-        "jsCode": "// Calculate Difficulty and Opportunity Scores\nconst data = $input.item.json;\nconst serpOverview = data.serpOverview || [];\nconst authorityMetrics = data.authorityMetrics || {};\nconst contentGaps = data.contentGaps || {};\nconst searchIntent = data.searchIntent || {};\n\n// === DIFFICULTY SCORE (0-100, higher = harder) ===\nlet difficultyScore = 0;\n\n// 1. Domain Authority Factor (0-40 points)\nconst highAuthorityRatio = authorityMetrics.highAuthorityCount / (authorityMetrics.totalResults || 1);\ndifficultyScore += highAuthorityRatio * 40;\n\n// 2. Domain Diversity Factor (0-20 points)\nconst domainDiversity = authorityMetrics.uniqueDomains / (authorityMetrics.totalResults || 1);\nif (domainDiversity > 0.8) {\n  difficultyScore += 5; // High diversity = easier\n} else if (domainDiversity < 0.5) {\n  difficultyScore += 20; // Low diversity = dominated by few sites\n} else {\n  difficultyScore += 10;\n}\n\n// 3. Content Saturation (0-20 points)\nconst saturatedThemes = (contentGaps.repeatedCompetitorAngles || []).length;\ndifficultyScore += Math.min(saturatedThemes * 5, 20);\n\n// 4. Intent Competition (0-20 points)\nconst intentScores = searchIntent.intent_confidence || {};\nif (intentScores.transactional > 60) {\n  difficultyScore += 20; // Transactional = high competition\n} else if (intentScores.informational > 60) {\n  difficultyScore += 10; // Informational = medium competition\n} else {\n  difficultyScore += 15;\n}\n\n// Cap difficulty score\ndifficultyScore = Math.min(Math.round(difficultyScore), 100);\n\n// === OPPORTUNITY SCORE (0-100, higher = better opportunity) ===\nlet opportunityScore = 0;\n\n// 1. Content Gap Bonus (0-40 points)\nconst missingTopics = (contentGaps.missingSubtopics || []).length;\nconst thinAreas = (contentGaps.thinContentAreas || []).length;\nopportunityScore += Math.min(missingTopics * 10 + thinAreas * 5, 40);\n\n// 2. Keyword Expansion Potential (0-25 points)\nconst relatedKeywordCount = (data.relatedKeywords || []).length;\nopportunityScore += Math.min(relatedKeywordCount * 1.25, 25);\n\n// 3. Intent Alignment (0-20 points)\nif (searchIntent.primary_intent === 'Informational' || searchIntent.primary_intent === 'Commercial') {\n  opportunityScore += 20; // Good for content marketing\n} else if (searchIntent.primary_intent === 'Mixed') {\n  opportunityScore += 15;\n} else {\n  opportunityScore += 10;\n}\n\n// 4. Competition Weakness (0-15 points)\nif (difficultyScore < 40) {\n  opportunityScore += 15; // Low difficulty = high opportunity\n} else if (difficultyScore < 60) {\n  opportunityScore += 10;\n} else {\n  opportunityScore += 5;\n}\n\n// Cap opportunity score\nopportunityScore = Math.min(Math.round(opportunityScore), 100);\n\n// === PRIORITY CLASSIFICATION ===\nlet priority = 'Low';\nconst combinedScore = opportunityScore - (difficultyScore * 0.7);\n\nif (combinedScore > 30 && opportunityScore > 60) {\n  priority = 'High';\n} else if (combinedScore > 10 && opportunityScore > 40) {\n  priority = 'Medium';\n}\n\nreturn {\n  ...data,\n  difficultyScore: difficultyScore,\n  opportunityScore: opportunityScore,\n  priority: priority,\n  scoreBreakdown: {\n    difficulty_factors: {\n      domain_authority: Math.round(highAuthorityRatio * 40),\n      domain_diversity: domainDiversity > 0.8 ? 5 : (domainDiversity < 0.5 ? 20 : 10),\n      content_saturation: Math.min(saturatedThemes * 5, 20),\n      intent_competition: intentScores.transactional > 60 ? 20 : (intentScores.informational > 60 ? 10 : 15)\n    },\n    opportunity_factors: {\n      content_gaps: Math.min(missingTopics * 10 + thinAreas * 5, 40),\n      keyword_expansion: Math.min(relatedKeywordCount * 1.25, 25),\n      intent_alignment: searchIntent.primary_intent === 'Informational' || searchIntent.primary_intent === 'Commercial' ? 20 : 10,\n      competition_weakness: difficultyScore < 40 ? 15 : (difficultyScore < 60 ? 10 : 5)\n    }\n  }\n};"
-      },
-      "id": "score-difficulty-opportunity-node",
-      "name": "Score Difficulty & Opportunity",
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
-      "position": [2000, 300]
-    },
-    {
-      "parameters": {
-        "resource": "text",
-        "operation": "message",
-        "modelId": "gpt-4o-mini",
-        "messages": {
-          "values": [
-            {
-              "role": "system",
-              "content": "You are an expert SEO keyword clustering specialist. Group related keywords into semantic clusters. Each cluster should have a clear topic focus and recommended content strategy. Return ONLY valid JSON."
-            },
-            {
-              "role": "user",
-              "content": "=Cluster these keywords semantically:\n\nPrimary Keyword: {{ $json.keyword }}\n\nRelated Keywords:\n{{ JSON.stringify($json.relatedKeywords.map(k => k.keyword), null, 2) }}\n\nSearch Intent: {{ $json.searchIntent.primary_intent }}\n\nRespond with this exact JSON structure:\n{\n  \"clusters\": [\n    {\n      \"topic_name\": \"clear cluster name\",\n      \"keywords\": [\"keyword1\", \"keyword2\"],\n      \"primary_keyword\": \"best keyword for this cluster\",\n      \"secondary_keywords\": [\"supporting keyword1\", \"supporting keyword2\"],\n      \"recommended_page_type\": \"one of: guide, blog_post, service_page, landing_page, comparison, list_article\",\n      \"content_angle\": \"brief description of content approach\"\n    }\n  ]\n}"
-            }
-          ]
-        },
-        "options": {
-          "temperature": 0.4
-        }
-      },
-      "id": "cluster-keywords-node",
-      "name": "Cluster Keywords",
-      "type": "@n8n/n8n-nodes-langchain.openAi",
-      "typeVersion": 1.4,
-      "position": [2220, 300]
-    },
-    {
-      "parameters": {
-        "jsCode": "// Parse clustering response and merge\nconst data = $('Score Difficulty & Opportunity').item.json;\nconst aiResponse = $input.item.json;\n\nlet clusterData;\ntry {\n  const content = aiResponse.message?.content || aiResponse.text || JSON.stringify(aiResponse);\n  \n  // Try to extract JSON from markdown code blocks if present\n  const jsonMatch = content.match(/```(?:json)?\\s*([\\s\\S]*?)```/) || [null, content];\n  const jsonStr = jsonMatch[1].trim();\n  \n  clusterData = JSON.parse(jsonStr);\n} catch (e) {\n  // Fallback cluster data\n  clusterData = {\n    clusters: [\n      {\n        topic_name: 'Primary Topic',\n        keywords: [data.keyword],\n        primary_keyword: data.keyword,\n        secondary_keywords: data.relatedKeywords.slice(0, 3).map(k => k.keyword),\n        recommended_page_type: 'guide',\n        content_angle: 'Comprehensive guide covering all aspects'\n      }\n    ]\n  };\n}\n\nreturn {\n  ...data,\n  keywordClusters: clusterData.clusters || []\n};"
-      },
-      "id": "parse-clusters-node",
-      "name": "Parse Clusters",
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
-      "position": [2440, 300]
-    },
-    {
-      "parameters": {
-        "jsCode": "// Build Final SCO Report\nconst data = $input.item.json;\n\n// Assemble the complete report\nconst scoReport = {\n  keyword: data.keyword,\n  search_intent: {\n    primary: data.searchIntent.primary_intent || 'Mixed',\n    confidence_scores: data.searchIntent.intent_confidence || {},\n    reasoning: data.searchIntent.reasoning || ''\n  },\n  difficulty_score: data.difficultyScore,\n  opportunity_score: data.opportunityScore,\n  priority: data.priority,\n  score_breakdown: data.scoreBreakdown || {},\n  serp_overview: data.serpOverview || [],\n  content_gaps: {\n    missing_subtopics: data.contentGaps.missingSubtopics || [],\n    thin_content_areas: data.contentGaps.thinContentAreas || [],\n    repeated_competitor_angles: data.contentGaps.repeatedCompetitorAngles || [],\n    content_opportunities: data.contentGaps.contentOpportunities || [],\n    content_themes: data.contentGaps.contentThemes || {}\n  },\n  keyword_clusters: data.keywordClusters || [],\n  related_keywords: data.relatedKeywords || [],\n  metadata: {\n    search_depth: data.depth,\n    total_serp_results: data.serpOverview.length,\n    total_related_keywords: data.relatedKeywords.length,\n    total_clusters: data.keywordClusters.length,\n    authority_metrics: data.authorityMetrics || {},\n    timestamp: data.timestamp\n  }\n};\n\nreturn scoReport;"
-      },
-      "id": "build-output-node",
-      "name": "Build Output",
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
-      "position": [2660, 300]
     },
     {
       "parameters": {
@@ -247,6 +128,10 @@
               {
                 "name": "Content-Type",
                 "value": "application/json"
+              },
+              {
+                "name": "X-Workflow-Version",
+                "value": "2.0-optimized"
               }
             ]
           }
@@ -256,7 +141,7 @@
       "name": "Respond",
       "type": "n8n-nodes-base.respondToWebhook",
       "typeVersion": 1.1,
-      "position": [2880, 300]
+      "position": [1560, 300]
     }
   ],
   "connections": {
@@ -278,11 +163,6 @@
             "node": "Fetch SERP",
             "type": "main",
             "index": 0
-          },
-          {
-            "node": "Fetch Related Keywords",
-            "type": "main",
-            "index": 0
           }
         ]
       ]
@@ -291,124 +171,36 @@
       "main": [
         [
           {
-            "node": "Process SERP Data",
+            "node": "Process & Analyze",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Fetch Related Keywords": {
+    "Process & Analyze": {
       "main": [
         [
           {
-            "node": "Process Related Keywords",
+            "node": "AI Analysis",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Process SERP Data": {
+    "AI Analysis": {
       "main": [
         [
           {
-            "node": "Merge Data",
+            "node": "Score & Build Report",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Process Related Keywords": {
-      "main": [
-        [
-          {
-            "node": "Merge Data",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Merge Data": {
-      "main": [
-        [
-          {
-            "node": "Gap Analysis",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Gap Analysis": {
-      "main": [
-        [
-          {
-            "node": "Classify Intent",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Classify Intent": {
-      "main": [
-        [
-          {
-            "node": "Parse Intent Response",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Parse Intent Response": {
-      "main": [
-        [
-          {
-            "node": "Score Difficulty & Opportunity",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Score Difficulty & Opportunity": {
-      "main": [
-        [
-          {
-            "node": "Cluster Keywords",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Cluster Keywords": {
-      "main": [
-        [
-          {
-            "node": "Parse Clusters",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Parse Clusters": {
-      "main": [
-        [
-          {
-            "node": "Build Output",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Build Output": {
+    "Score & Build Report": {
       "main": [
         [
           {
@@ -422,11 +214,13 @@
   },
   "pinData": {},
   "settings": {
-    "executionOrder": "v1"
+    "executionOrder": "v1",
+    "saveExecutionProgress": false,
+    "saveManualExecutions": false
   },
   "staticData": null,
-  "tags": [],
+  "tags": ["seo", "keyword-research", "optimized"],
   "triggerCount": 1,
   "updatedAt": "2025-11-17T00:00:00.000Z",
-  "versionId": "1"
+  "versionId": "2.0"
 }
